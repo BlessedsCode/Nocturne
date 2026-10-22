@@ -176,7 +176,11 @@ function layout() {
   const [width,height] = win.getContentSize();
   for (const t of tabs.values()) if(t.view) {
     t.view.setVisible(t.id === active && !overlay && !profileIntroduction && !t.error && !t.security);
-    t.view.setBounds({x:76,y:112,width:Math.max(1,width-88),height:Math.max(1,height-124)});
+    if(t.id === active && t.htmlFullScreen){
+      t.view.setBounds({x:0,y:0,width,height});
+    }else{
+      t.view.setBounds({x:76,y:112,width:Math.max(1,width-88),height:Math.max(1,height-124)});
+    }
   }
 }
 function newTab(url, options = {}) {
@@ -195,6 +199,10 @@ function navigate(input) {
   try {url=resolveAddress(input);} catch(e) {return {error:e.message};}
   const t=current(); if(!t)return;
   t.error=null;t.security=null;
+  if(t.htmlFullScreen){
+    t.htmlFullScreen=false;
+    if(win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
+  }
   if(!url) {closePageFind(false);const view=t.view;t.view=null;t.url='';t.title='Новая вкладка';t.loading=false;t.favicon='';if(view){win.contentView.removeChildView(view);view.webContents.close();}layout();state();return;}
   if(win.webContents.isDevToolsOpened())win.webContents.closeDevTools();
   if(!t.view) {
@@ -223,13 +231,23 @@ function navigate(input) {
     wc.on('did-navigate-in-page',(_event,url)=>{t.url=url;state();});
     wc.on('did-fail-load',(_event,code,description,url,isMainFrame)=>{if(isMainFrame&&code!==-3&&!t.security){t.error=description;t.loading=false;layout();state();}});
     wc.on('render-process-gone',(_event,details)=>{if(shuttingDown||!tabs.has(t.id))return;t.loading=false;t.error='Процесс страницы завершён ('+details.reason+'). Обнови вкладку.';layout();state();});
+    wc.on('enter-html-full-screen',()=>{
+      t.htmlFullScreen=true;
+      if(!win.isFullScreen())win.setFullScreen(true);
+      layout();
+    });
+    wc.on('leave-html-full-screen',()=>{
+      t.htmlFullScreen=false;
+      if(win.isFullScreen())win.setFullScreen(false);
+      layout();
+    });
     attachBrowserControls(wc);
   }
   if(t.url&&new URL(t.url).origin!==new URL(url).origin)t.favicon='';
   t.url=url;t.title=new URL(url).hostname;t.loading=true;
   t.view.webContents.loadURL(url).catch(()=>{});layout();state();
 }
-function closeTab(id){const t=tabs.get(id);if(!t)return;closePageFind(false);closedTabs.push(t.url||'');if(closedTabs.length>20)closedTabs.shift();const ids=[...tabs.keys()],index=ids.indexOf(id),view=t.view;t.view=null;tabs.delete(id);if(active===id)active=profile.preferences.closeToLeft?(ids[index-1]||ids[index+1]):(ids[index+1]||ids[index-1]);if(view){win.contentView.removeChildView(view);view.webContents.close();}if(!tabs.size)newTab();layout();state();focusActiveTab();}
+function closeTab(id){const t=tabs.get(id);if(!t)return;if(t.htmlFullScreen&&win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);closePageFind(false);closedTabs.push(t.url||'');if(closedTabs.length>20)closedTabs.shift();const ids=[...tabs.keys()],index=ids.indexOf(id),view=t.view;t.view=null;tabs.delete(id);if(active===id)active=profile.preferences.closeToLeft?(ids[index-1]||ids[index+1]):(ids[index+1]||ids[index-1]);if(view){win.contentView.removeChildView(view);view.webContents.close();}if(!tabs.size)newTab();layout();state();focusActiveTab();}
 app.whenReady().then(async()=>{
   if(!ownsProfile)return;
   const accelerators=[['F12','devtools'],['Ctrl+Shift+I','devtools'],['Ctrl+Shift+J','console'],['Ctrl+Shift+C','inspect-picker'],['Ctrl+T','new-tab'],['Ctrl+W','close-tab'],['Ctrl+Shift+T','reopen-tab'],['Ctrl+Tab','next-tab'],['Ctrl+Shift+Tab','previous-tab'],['Ctrl+PageDown','next-tab'],['Ctrl+PageUp','previous-tab'],['Ctrl+L','address'],['Alt+D','address'],['F6','address'],['F5','reload'],['Ctrl+R','reload'],['Ctrl+F5','hard-reload'],['Ctrl+Shift+R','hard-reload'],['Ctrl+F','find'],['F3','find-next'],['Shift+F3','find-previous'],['Ctrl+H','history'],['Ctrl+J','downloads'],['Ctrl+D','bookmark'],['Ctrl+P','print'],['Ctrl+S','save-page'],['Ctrl+U','source'],['F11','fullscreen'],['Alt+Left','back'],['Alt+Right','forward'],['Alt+Home','home'],['Ctrl+Shift+Delete','privacy'],...Array.from({length:9},(_,index)=>['Ctrl+'+(index+1),'tab-'+(index+1)])];
@@ -264,13 +282,13 @@ app.whenReady().then(async()=>{
   const originOf=value=>{try{return new URL(value).origin;}catch{return '';}};
   sites.setPermissionRequestHandler(async(wc,permission,callback,details)=>{
     if(!wc||wc.isDestroyed()||!details){callback(false);return;}
-    if(permission==='clipboard-sanitized-write'||permission==='clipboard-write'){callback(true);return;}
+    if(permission==='fullscreen'||permission==='pointerLock'||permission==='clipboard-sanitized-write'||permission==='clipboard-write'){callback(true);return;}
     const origin=originOf(details.requestingUrl||wc.getURL());const currentOrigin=originOf(wc.getURL());
     if(details.isMainFrame===false||!['media','notifications','geolocation'].includes(permission)||profile.preferences[permission]!=='ask'||!origin.startsWith('https://')||origin!==currentOrigin){callback(false);return;}
     try{const labels={media:'камере и микрофону',notifications:'уведомлениям',geolocation:'местоположению'};const result=await dialog.showMessageBox(win,{type:'question',title:'Разрешение сайта',message:`Разрешить ${origin} доступ к ${labels[permission]}?`,buttons:['Запретить','Разрешить на этот запуск'],defaultId:0,cancelId:0});const allow=result.response===1&&!wc.isDestroyed()&&originOf(wc.getURL())===origin;if(allow)grants.add(origin+'|'+permission);callback(allow);}catch{callback(false);}
   });
   sites.setPermissionCheckHandler((_wc,permission,origin)=>{
-    if(permission==='clipboard-sanitized-write'||permission==='clipboard-write')return true;
+    if(permission==='fullscreen'||permission==='pointerLock'||permission==='clipboard-sanitized-write'||permission==='clipboard-write')return true;
     return profile.preferences[permission]==='ask'&&grants.has(originOf(origin)+'|'+permission);
   });
   sites.webRequest.onBeforeSendHeaders((details,callback)=>{if(profile.preferences.doNotTrack)details.requestHeaders.DNT='1';callback({requestHeaders:details.requestHeaders});});
@@ -285,6 +303,15 @@ app.whenReady().then(async()=>{
   win.webContents.on('will-attach-webview',event=>event.preventDefault());
   win.webContents.on('did-finish-load',()=>{profileIntroduction=false;requestOverlay(false);if(tabs.size){layout();state();return;}const restore=profile.preferences.restoreSession?profile.lastSession:[];for(const url of restore)if(/^https?:\/\//i.test(url))newTab(url);if(!tabs.size)newTab();});
   win.on('resize',layout);
+  win.on('leave-full-screen',()=>{
+    for(const t of tabs.values()){
+      if(t.htmlFullScreen){
+        t.htmlFullScreen=false;
+        t.view?.webContents.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})');
+      }
+    }
+    layout();
+  });
   win.on('close',()=>{shuttingDown=true;combinedSearch?.cancel();for(const child of win.getChildWindows())child.destroy();profile.write('tabs.json',[...tabs.values()].map(t=>t.url).filter(Boolean));});
   win.on('closed',()=>{clearInterval(profileRevealTimer);combinedSearch?.cancel();for(const t of tabs.values())t.view?.webContents.close();tabs.clear();});
   if(Object.values(security.lists).some(list=>Date.now()-list.updated>8*3600000))security.update().catch(()=>{});
@@ -413,7 +440,16 @@ app.whenReady().then(async()=>{
     if(action==='navigate')return navigate(value);
     if(action==='open-tab'&&typeof value==='string'&&/^https?:\/\//i.test(value))return newTab(value);
     if(action==='new')newTab();
-    if(action==='switch'&&tabs.has(value)){closePageFind(false);active=value;layout();state();focusActiveTab();}
+    if(action==='switch'&&tabs.has(value)){
+      closePageFind(false);
+      const prev=current();
+      if(prev?.htmlFullScreen&&prev.id!==value){
+        prev.htmlFullScreen=false;
+        prev.view?.webContents.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})');
+        if(win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
+      }
+      active=value;layout();state();focusActiveTab();
+    }
     if(action==='close-tab')closeTab(value);
     if(action==='reorder-tabs'&&Array.isArray(value)){
       const reordered=new Map();
