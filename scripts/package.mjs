@@ -8,7 +8,7 @@ const results=await packager({dir:process.cwd(),name:'Nocturne',executableName:'
 for(const directory of results){
  const executable=path.join(directory,'Nocturne.exe');
  await flipFuses(executable,{version:FuseVersion.V1,[FuseV1Options.RunAsNode]:false,[FuseV1Options.EnableCookieEncryption]:true,[FuseV1Options.EnableNodeOptionsEnvironmentVariable]:false,[FuseV1Options.EnableNodeCliInspectArguments]:false,[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]:true,[FuseV1Options.OnlyLoadAppFromAsar]:true});
- const wire=await getCurrentFuseWire(executable);await writeFile(path.join(directory,'security-build.json'),JSON.stringify({version:pkg.version,fuses:wire,signed:false,autoUpdates:false},null,2));
+ const wire=await getCurrentFuseWire(executable);await writeFile(path.join(directory,'security-build.json'),JSON.stringify({version:pkg.version,fuses:wire,signed:false,autoUpdates:false,manualUpdates:'github-releases-sha256'},null,2));
  await copyFile('docs/FOR-FRIEND.txt',path.join(directory,'START-HERE.txt'));
  console.log('Built '+executable+' (unsigned; hardened fuses and ASAR validation enabled).');
 }

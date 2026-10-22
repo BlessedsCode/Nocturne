@@ -2,6 +2,7 @@ const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('browser', {
   profile: process.argv.includes('--nocturne-profile=personal')?'personal':'main',
   onPasswordImportProgress: callback => ipcRenderer.on('password-import-progress',(_event,data)=>callback(data)),
+  onAppUpdate: callback => ipcRenderer.on('app-update',(_event,data)=>callback(data)),
   onCombinedSearch: callback => ipcRenderer.on('combined-search', (_event, data) => callback(data)),
   onSearchSourceClosed: callback => ipcRenderer.on('search-source-closed', (_event, data) => callback(data)),
   onBrowserAction: callback => ipcRenderer.on('browser-action', (_event, data) => callback(data)),

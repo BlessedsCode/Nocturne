@@ -37,3 +37,7 @@ The packaged build defaults to `%APPDATA%/NocturneSecure`, separate from the sou
 ## Remaining work
 
 Publisher signing and authenticated auto-updates, independent security review/fuzzing, broader download reputation, account synchronization and extension security, and stronger credential-vault unlocking. Local list and cloud results can contain false positives and miss newly created threats. OS compromise and a malicious same-user local process are outside this browser's security boundary.
+
+## User-initiated release updates
+
+The About page checks the fixed public GitHub repository only after an explicit click. Stable versions must increase numerically. An installer must have the exact repository asset URL, expected name, bounded size and GitHub-provided SHA-256 digest. Streaming downloads enforce size and checksum before Defender scanning. Installation requires a separate click and another file hash verification; a blocked scan cannot launch. If Defender is unavailable, the main process requests confirmation. The ordinary per-user Inno installer runs externally and the current app quits; no silent background installation or signed publisher authenticity is claimed. SHA-256 from GitHub authenticates consistency with that service, not an independently signed publisher; a compromised repository/account remains a supply-chain risk.

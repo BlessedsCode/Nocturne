@@ -10,6 +10,8 @@ const {CombinedSearch}=require('./combined-search');
 const {translateEnglish}=require('./english-query');
 const {discoverBrowsers,openBrowserExport,definitions:browserDefinitions}=require('./browser-import');
 const {AutomaticImport}=require('./automatic-import');
+const {AppUpdates}=require('./app-updates');
+const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
 const searchSuggestions=new SearchSuggestions((...args)=>net.fetch(...args));
 const path = require('node:path');
@@ -23,6 +25,7 @@ let profileRevealTimer;
 let profileIntroduction=false;
 let vault, downloads, profile, icons, security, combinedSearch;
 let automaticImport;
+let appUpdates;
 app.enableSandbox();
 app.commandLine.appendSwitch('site-per-process');
 if(app.isPackaged){
@@ -227,6 +230,10 @@ app.whenReady().then(async()=>{
   icons=setupFavicons({directory:app.getPath('userData'),fetch:(...args)=>security.secureFetch(...args)});
   vault=new Vault(app.getPath('userData'),safeStorage);
   automaticImport=new AutomaticImport({vault,notify:result=>{if(win&&!win.isDestroyed())win.webContents.send('password-import-progress',result);}});
+  appUpdates=new AppUpdates({current:app.getVersion(),directory:path.join(app.getPath('userData'),'updates'),fetch:(...args)=>net.fetch(...args),scanner:createScanner(),markDownloaded,notify:status=>{if(win&&!win.isDestroyed())win.webContents.send('app-update',status);},launch:async(file,scan)=>{
+    if(scan.state!=='clean'){const answer=await dialog.showMessageBox(win,{type:'warning',title:'Установщик не проверен Defender',message:'Контрольная сумма совпала, но Defender не подтвердил проверку. Открыть установщик?',buttons:['Отмена','Открыть'],defaultId:0,cancelId:0});if(answer.response!==1)return {canceled:true};}
+    const error=await shell.openPath(file);if(error)throw new Error('Не удалось открыть установщик.');app.quit();return {started:true};
+  }});
   const sites=session.fromPartition('persist:nocturne');
   sites.spellCheckerEnabled=profile.preferences.spellcheck;
   downloads=setupDownloads({session:sites,app,shell,security,getPreferences:()=>profile.preferences,getWindow:()=>win,notify:list=>{if(win&&!win.isDestroyed())win.webContents.send('downloads',list);}});
@@ -269,6 +276,10 @@ app.whenReady().then(async()=>{
     if(event.sender!==win.webContents||event.senderFrame!==win.webContents.mainFrame||event.senderFrame.url!==shellURL)return;
     try {
     const wc=current()?.view?.webContents;
+    if(action==='app-update-status')return appUpdates.status();
+    if(action==='app-update-check')return await appUpdates.check();
+    if(action==='app-update-download')return await appUpdates.download();
+    if(action==='app-update-install')return await appUpdates.install();
     if(action==='profile-reveal'){revealPersonalProfile(value===true);return;}
     if(action==='profile-intro-complete'){profileIntroduction=false;layout();return;}
     if(action==='profile-open'){
