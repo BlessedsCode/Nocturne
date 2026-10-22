@@ -13,6 +13,7 @@ const {AutomaticImport}=require('./automatic-import');
 const {AppUpdates}=require('./app-updates');
 const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
+const {ExtensionsManager}=require('./extensions');
 const searchSuggestions=new SearchSuggestions((...args)=>net.fetch(...args));
 const path = require('node:path');
 const {pathToFileURL}=require('node:url');
@@ -26,6 +27,7 @@ let profileIntroduction=false;
 let vault, downloads, profile, icons, security, combinedSearch;
 let automaticImport;
 let appUpdates;
+let extensionsManager;
 app.enableSandbox();
 app.commandLine.appendSwitch('site-per-process');
 if(app.isPackaged){
@@ -245,6 +247,8 @@ app.whenReady().then(async()=>{
   }});
   const sites=session.fromPartition('persist:nocturne');
   sites.spellCheckerEnabled=profile.preferences.spellcheck;
+  extensionsManager=new ExtensionsManager({directory:path.join(app.getPath('userData'),'extensions'),session:sites,fetch:(...args)=>net.fetch(...args)});
+  await extensionsManager.initialize();
   downloads=setupDownloads({session:sites,app,shell,security,getPreferences:()=>profile.preferences,getWindow:()=>win,notify:list=>{if(win&&!win.isDestroyed())win.webContents.send('downloads',list);}});
   sites.webRequest.onBeforeRequest((details,callback)=>{
     // Session requests (favicons, workers, fetch) may have no owning WebContents.
@@ -350,6 +354,11 @@ app.whenReady().then(async()=>{
       Menu.buildFromTemplate([{label:'Открыть в новой вкладке',click:()=>send('open')},{label:'Копировать адрес ссылки',click:()=>send('copy')},{type:'separator'},{label:'Открепить с главной',click:()=>send('home')},{label:'Открепить с боковой панели',click:()=>send('sidebar')},{label:'Изменить ссылку',click:()=>send('edit')},{type:'separator'},{label:'Удалить ссылку',click:()=>send('delete')}]).popup({window:win});return;
     }
     if(action==='downloads')return await downloads.command(value?.action,value?.id);
+    if(action==='extensions-list')return {installed:extensionsManager.listInstalled(),catalog:await extensionsManager.search('')};
+    if(action==='extensions-search')return await extensionsManager.search(value);
+    if(action==='extensions-install')return await extensionsManager.install(value);
+    if(action==='extensions-toggle')return await extensionsManager.toggle(value?.id,value?.enabled);
+    if(action==='extensions-remove')return await extensionsManager.remove(value);
     if(action==='passwords-list')return await vault.list();
     if(action==='passwords-delete')return await vault.remove(value);
     if(action==='passwords-import'){
