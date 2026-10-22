@@ -6,8 +6,11 @@ saved=saved.filter(item=>item&&typeof item.url==='string');
 links=links.filter(link=>link&&typeof link.url==='string'&&typeof link.name==='string').map(link=>({home:true,sidebar:true,...link}));
 const faviconCache=stored('favicons',{});
 for(const [key,value] of Object.entries(faviconCache))if(typeof value!=='string')delete faviconCache[key];
+const MAX_FAVICONS=150;let saveIconTimer=null;
+function scheduleSaveIconCache(){if(!saveIconTimer){saveIconTimer=setTimeout(()=>{saveIconTimer=null;saveIconCache();},2000);}}
+function setFaviconCache(origin,icon){if(faviconCache[origin]===icon)return;faviconCache[origin]=icon;const keys=Object.keys(faviconCache);if(keys.length>MAX_FAVICONS){for(let i=0;i<keys.length-MAX_FAVICONS;i++)delete faviconCache[keys[i]];}scheduleSaveIconCache();}
 const iconRequests=new Map();
-function saveIconCache(){localStorage.setItem('favicons',JSON.stringify(Object.fromEntries(Object.entries(faviconCache).filter(([,value])=>!value.startsWith('data:')))));}
+function saveIconCache(){try{localStorage.setItem('favicons',JSON.stringify(Object.fromEntries(Object.entries(faviconCache).filter(([,value])=>!value.startsWith('data:')))));}catch{}}
 const defaults={opacity:42,blur:18,brightness:85,saturation:110,texture:true,preset:'dark'};
 let settings={...defaults,...stored('glass',{})},preferences={interfaceColor:'moss',wallpaper:'mont',engine:'google',animations:true,showHomeLinks:true,showSidebarLinks:true,...stored('preferences',{})};
 const panelIds=['settings','favorites','downloads-panel','links-panel'];
@@ -27,8 +30,13 @@ function favicon(source,url,title){
   img.onload=()=>wrap.classList.add('has-image');
   img.onerror=()=>{if(!retried&&fallback&&img.src!==fallback){retried=true;img.src=fallback;}else{img.remove();wrap.classList.remove('has-image');}};
   if(valid||fallback){img.src=valid?source:fallback;wrap.append(img);}
-  if(!source&&fallback){const origin=new URL(url).origin;if(!iconRequests.has(origin))iconRequests.set(origin,Promise.resolve(command('favicon-get',url)).catch(()=>({icon:''})));
-    iconRequests.get(origin).then(result=>{if(result?.icon){if(!faviconCache[origin]){faviconCache[origin]=result.icon;saveIconCache();}img.src=faviconCache[origin];if(!img.isConnected)wrap.append(img);}});
+  if(!source&&fallback){const origin=new URL(url).origin;
+    if(!iconRequests.has(origin)){
+      const req=Promise.resolve(command('favicon-get',url)).then(result=>{
+        if(result?.icon){setFaviconCache(origin,result.icon);img.src=result.icon;if(!img.isConnected)wrap.append(img);}
+      }).catch(()=>{}).finally(()=>{iconRequests.delete(origin);});
+      iconRequests.set(origin,req);
+    }
   }return wrap;
 }
 const command=(action,value)=>api?.command(action,value);
@@ -60,80 +68,130 @@ async function panel(id){
   if(id==='settings'&&typeof loadBrowserSettings==='function')loadBrowserSettings();
 }
 let draggedTabId=null,wasDraggingTab=false;
+function createTabElement(t, s){
+  const tab=document.createElement('div');
+  tab.dataset.tabId=String(t.id);
+  tab.className='tab'+(t.id===s.active?' active':'')+(t.loading?' tab-loading':'')+(t.sleeping?' tab-sleeping':'');
+  tab.draggable=true;
+  const fav=favicon(t.favicon,t.url,t.title);
+  fav.classList.add('tab-icon');
+  tab._lastFavicon=t.favicon||t.url||'';
+  const titleSpan=text('span',t.title,'tab-title');
+  const closeBtn=button('×','Закрыть вкладку',e=>{e.stopPropagation();command('close-tab',t.id);});
+  tab.append(fav,titleSpan,closeBtn);
+  tab.onclick=async()=>{
+    if(wasDraggingTab){wasDraggingTab=false;return;}
+    await closePanels();
+    command('switch',t.id);
+  };
+  tab.onauxclick=e=>{
+    if(e.button===1){
+      e.preventDefault();
+      e.stopPropagation();
+      command('close-tab',t.id);
+    }
+  };
+  tab.onmousedown=e=>{
+    if(e.button===1){
+      e.preventDefault();
+    }
+  };
+  tab.oncontextmenu=e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    command('tab-context-menu',{id:t.id,x:e.clientX,y:e.clientY});
+  };
+  tab.ondragstart=e=>{
+    draggedTabId=t.id;
+    wasDraggingTab=true;
+    e.dataTransfer.setData('text/plain',String(t.id));
+    e.dataTransfer.effectAllowed='move';
+    tab.classList.add('tab-dragging');
+  };
+  tab.ondragend=()=>{
+    draggedTabId=null;
+    tab.classList.remove('tab-dragging');
+    document.querySelectorAll('.tab').forEach(el=>el.classList.remove('drag-over-before','drag-over-after'));
+    setTimeout(()=>{wasDraggingTab=false;},100);
+  };
+  tab.ondragover=e=>{
+    e.preventDefault();
+    e.dataTransfer.dropEffect='move';
+    const rect=tab.getBoundingClientRect();
+    if(e.clientX < rect.left + rect.width / 2){
+      tab.classList.add('drag-over-before');
+      tab.classList.remove('drag-over-after');
+    } else {
+      tab.classList.add('drag-over-after');
+      tab.classList.remove('drag-over-before');
+    }
+  };
+  tab.ondragleave=()=>{
+    tab.classList.remove('drag-over-before','drag-over-after');
+  };
+  tab.ondrop=e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    tab.classList.remove('drag-over-before','drag-over-after');
+    const srcId=Number(e.dataTransfer.getData('text/plain')||draggedTabId);
+    const targetId=t.id;
+    if(!srcId||srcId===targetId)return;
+    const rect=tab.getBoundingClientRect();
+    const before=e.clientX < rect.left + rect.width / 2;
+    const ids=state.tabs.map(item=>item.id);
+    const srcIdx=ids.indexOf(srcId);
+    if(srcIdx===-1)return;
+    ids.splice(srcIdx,1);
+    const targetIdx=ids.indexOf(targetId);
+    if(targetIdx===-1)return;
+    ids.splice(before?targetIdx:targetIdx+1,0,srcId);
+    command('reorder-tabs',ids);
+  };
+  return tab;
+}
+function updateTabElement(tab, t, s){
+  tab.classList.toggle('active', t.id===s.active);
+  tab.classList.toggle('tab-loading', !!t.loading);
+  tab.classList.toggle('tab-sleeping', !!t.sleeping);
+  const titleSpan=tab.querySelector('.tab-title');
+  if(titleSpan && titleSpan.textContent!==t.title){
+    titleSpan.textContent=t.title;
+  }
+  const iconKey=t.favicon||t.url||'';
+  if(tab._lastFavicon!==iconKey){
+    tab._lastFavicon=iconKey;
+    const oldIcon=tab.querySelector('.tab-icon');
+    const newIcon=favicon(t.favicon,t.url,t.title);
+    newIcon.classList.add('tab-icon');
+    if(oldIcon)oldIcon.replaceWith(newIcon);
+    else tab.prepend(newIcon);
+  }
+}
 function render(s){
   state=s;const signature=JSON.stringify([s.tabs,s.active]);
   if(signature!==tabSignature){
     tabSignature=signature;
-    $('tabs').replaceChildren();
-    for(const t of s.tabs){
-      const tab=document.createElement('div');
-      tab.className='tab'+(t.id===s.active?' active':'')+(t.loading?' tab-loading':'');
-      tab.draggable=true;
-      tab.append(favicon(t.favicon,t.url,t.title),text('span',t.title,'tab-title'),button('×','Закрыть вкладку',e=>{e.stopPropagation();command('close-tab',t.id);}));
-      tab.onclick=async()=>{
-        if(wasDraggingTab){wasDraggingTab=false;return;}
-        await closePanels();
-        command('switch',t.id);
-      };
-      tab.onauxclick=e=>{
-        if(e.button===1){
-          e.preventDefault();
-          e.stopPropagation();
-          command('close-tab',t.id);
-        }
-      };
-      tab.onmousedown=e=>{
-        if(e.button===1){
-          e.preventDefault();
-        }
-      };
-      tab.ondragstart=e=>{
-        draggedTabId=t.id;
-        wasDraggingTab=true;
-        e.dataTransfer.setData('text/plain',String(t.id));
-        e.dataTransfer.effectAllowed='move';
-        tab.classList.add('tab-dragging');
-      };
-      tab.ondragend=()=>{
-        draggedTabId=null;
-        tab.classList.remove('tab-dragging');
-        document.querySelectorAll('.tab').forEach(el=>el.classList.remove('drag-over-before','drag-over-after'));
-        setTimeout(()=>{wasDraggingTab=false;},100);
-      };
-      tab.ondragover=e=>{
-        e.preventDefault();
-        e.dataTransfer.dropEffect='move';
-        const rect=tab.getBoundingClientRect();
-        if(e.clientX < rect.left + rect.width / 2){
-          tab.classList.add('drag-over-before');
-          tab.classList.remove('drag-over-after');
-        } else {
-          tab.classList.add('drag-over-after');
-          tab.classList.remove('drag-over-before');
-        }
-      };
-      tab.ondragleave=()=>{
-        tab.classList.remove('drag-over-before','drag-over-after');
-      };
-      tab.ondrop=e=>{
-        e.preventDefault();
-        e.stopPropagation();
-        tab.classList.remove('drag-over-before','drag-over-after');
-        const srcId=Number(e.dataTransfer.getData('text/plain')||draggedTabId);
-        const targetId=t.id;
-        if(!srcId||srcId===targetId)return;
-        const rect=tab.getBoundingClientRect();
-        const before=e.clientX < rect.left + rect.width / 2;
-        const ids=state.tabs.map(item=>item.id);
-        const srcIdx=ids.indexOf(srcId);
-        if(srcIdx===-1)return;
-        ids.splice(srcIdx,1);
-        const targetIdx=ids.indexOf(targetId);
-        if(targetIdx===-1)return;
-        ids.splice(before?targetIdx:targetIdx+1,0,srcId);
-        command('reorder-tabs',ids);
-      };
-      $('tabs').append(tab);
+    const tabsContainer=$('tabs');
+    const existingElements=new Map();
+    for(const child of Array.from(tabsContainer.children)){
+      if(child.dataset.tabId)existingElements.set(Number(child.dataset.tabId),child);
+    }
+    const currentTabIds=new Set(s.tabs.map(t=>t.id));
+    for(const [id,el] of existingElements){
+      if(!currentTabIds.has(id))el.remove();
+    }
+    for(let i=0;i<s.tabs.length;i++){
+      const t=s.tabs[i];
+      let el=existingElements.get(t.id);
+      if(!el){
+        el=createTabElement(t,s);
+      }else{
+        updateTabElement(el,t,s);
+      }
+      const currentAtPos=tabsContainer.children[i];
+      if(currentAtPos!==el){
+        tabsContainer.insertBefore(el,currentAtPos||null);
+      }
     }
   }
   const t=s.tabs.find(t=>t.id===s.active);if(document.activeElement!==$('address'))$('address').value=t?.url||'';

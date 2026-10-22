@@ -14,10 +14,10 @@ async function loadBrowserSettings(){
   const result=await action('settings-get');if(!result||result.error)return;browserSettings=result;
   document.querySelectorAll('[data-browser-setting]').forEach(input=>{const value=result[input.dataset.browserSetting];if(input.type==='checkbox')input.checked=!!value;else input.value=value;});
   $('download-directory').textContent=result.downloadDirectory;$('browser-version').textContent='Версия '+result.versions.app;
-  $('engine-version').textContent='Chromium '+result.versions.chromium+' · Electron '+result.versions.electron;
+  renderDiscardExceptions(result.discardExceptions);$('engine-version').textContent='Chromium '+result.versions.chromium+' · Electron '+result.versions.electron;
 }
 document.querySelectorAll('[data-browser-setting]').forEach(input=>input.onchange=async()=>{
-  const value=input.type==='checkbox'?input.checked:input.dataset.browserSetting==='zoom'?Number(input.value):input.value;
+  const value=input.type==='checkbox'?input.checked:['zoom','discardTimeoutMinutes'].includes(input.dataset.browserSetting)?Number(input.value):input.value;
   const result=await action('settings-update',{[input.dataset.browserSetting]:value});if(result?.error)loadBrowserSettings();else browserSettings={...browserSettings,...result};
 });
 for(const [id,key] of [['show-home-links','showHomeLinks'],['show-sidebar-links','showSidebarLinks']])$(id).onchange=()=>{preferences[key]=$(id).checked;applyPreferences();};
@@ -289,5 +289,50 @@ if ($('extensions-search-input')) {
       }
       renderExtensionsUI();
     }, 300);
+  };
+}
+
+function renderDiscardExceptions(exceptions) {
+  const container = $('discard-exceptions');
+  if (!container) return;
+  container.replaceChildren();
+  const list = Array.isArray(exceptions) ? exceptions : [];
+  if (!list.length) {
+    container.append(text('p', 'Список исключений пуст. Все подходящие неактивные вкладки будут усыпляться.', 'empty-hint'));
+    return;
+  }
+  for (const host of list) {
+    const row = document.createElement('div');
+    row.className = 'exception-row';
+    row.append(text('span', host), button('×', 'Удалить исключение', async () => {
+      const updated = (browserSettings.discardExceptions || []).filter(h => h.toLowerCase() !== host.toLowerCase());
+      const res = await action('settings-update', { discardExceptions: updated });
+      if (!res?.error) {
+        browserSettings.discardExceptions = updated;
+        renderDiscardExceptions(updated);
+      }
+    }));
+    container.append(row);
+  }
+}
+
+if ($('discard-exception-form')) {
+  $('discard-exception-form').onsubmit = async event => {
+    event.preventDefault();
+    const input = $('discard-exception-host');
+    let host = input.value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!host) return;
+    const current = browserSettings.discardExceptions || [];
+    if (!current.some(h => h.toLowerCase() === host)) {
+      const updated = [...current, host];
+      const res = await action('settings-update', { discardExceptions: updated });
+      if (!res?.error) {
+        browserSettings.discardExceptions = updated;
+        renderDiscardExceptions(updated);
+        input.value = '';
+      }
+    } else {
+      input.value = '';
+    }
   };
 }
