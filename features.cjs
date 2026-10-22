@@ -1,0 +1,72 @@
+const {_electron:electron}=require('playwright-core');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const fs=require('node:fs/promises');
+const http=require('node:http');
+const profile=path.resolve('artifacts','features-profile-'+Date.now());
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+const launch=()=>require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+profile],env});
+const settle=page=>page.evaluate(()=>Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{}))));
+(async()=>{
+ await fs.mkdir(profile,{recursive:true});
+ const server=http.createServer((req,res)=>{
+  if(req.url==='/download'){
+   const chunks=80,chunk=Buffer.alloc(16384,65);res.writeHead(200,{'Content-Disposition':'attachment; filename="nocturne-test.txt"','Content-Type':'application/octet-stream','Content-Length':chunks*chunk.length});
+   let count=0;const timer=setInterval(()=>{res.write(chunk);if(++count===chunks){clearInterval(timer);res.end();}},35);res.on('close',()=>clearInterval(timer));
+  }else{res.writeHead(200,{'Content-Type':'text/html'});res.end('<title>Download test</title><h1>Test download</h1>');}
+ });
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const base='http://127.0.0.1:'+server.address().port;
+ let app=await launch();
+ try{
+  let page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.waitForSelector('.tab');
+  assert.equal(await page.locator('#settings-button').count(),1);assert.equal(await page.locator('#rail-settings').count(),0);
+  await page.locator('.add-quick-link').click();await page.locator('#link-name').fill('Test site');await page.locator('#link-url').fill('https://example.com');await page.locator('#save-link').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#quick-links>.quick-link').length===4);
+  assert.equal(await page.locator('#rail-links [title="Test site"]').count(),1);
+  const row=page.locator('.link-row').filter({hasText:'Test site'});await row.locator('[title="Изменить"]').click();await page.locator('#link-name').fill('Renamed');await page.locator('#save-link').click();
+  await page.locator('.link-row').filter({hasText:'Renamed'}).locator('[title="Выше"]').click();
+  await page.locator('#link-name').fill('Bad link');await page.locator('#link-url').fill('javascript:alert(1)');await page.locator('#save-link').click();assert.match(await page.locator('#link-error').textContent(),/корректный адрес/);await page.locator('#link-form').evaluate(form=>form.reset());
+  await page.locator('#close-links').click();await page.waitForSelector('#links-panel[hidden]',{state:'attached'});
+  await page.locator('#settings-button').click();await page.locator('[data-section="appearance"]').click();await settle(page);await page.screenshot({path:'artifacts/settings.png'});
+  await page.locator('[data-section="general"]').click();await page.locator('#search-engine').selectOption('duckduckgo');await page.locator('#animations').uncheck();assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('no-motion')),true);await page.locator('#animations').check();
+  await page.locator('[data-section="passwords"]').click();
+  const csvPath=path.join(profile,'synthetic.csv');
+  await fs.writeFile(csvPath,'name,url,username,password\nExample,https://example.com/login,nocturne-test,SYNTHETIC_ONLY_123\nOther,https://example.org,other,OTHER_SYNTHETIC_456\n');
+  await app.evaluate(({dialog},file)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[file]});},csvPath);
+  await page.locator('#manual-password-import summary').click();await page.locator('#import-passwords').click();await page.waitForFunction(()=>document.querySelectorAll('.password-row').length===2);
+  assert.match(await page.locator('#import-status').textContent(),/Добавлено: 2/);
+  await page.locator('#import-passwords').click();await page.waitForFunction(()=>document.querySelector('#import-status').textContent.includes('Обновлено: 2'));
+  assert.equal((await fs.readFile(path.join(profile,'passwords.enc'))).includes(Buffer.from('SYNTHETIC_ONLY')),false);
+  assert.equal((await page.content()).includes('SYNTHETIC_ONLY'),false);
+  const metadata=await page.evaluate(()=>window.browser.command('passwords-list'));assert.equal('password' in metadata[0],false);
+  await settle(page);await page.screenshot({path:'artifacts/passwords.png'});
+  await page.locator('#close-settings').click();await page.locator('#address').fill('https://example.com');await page.locator('#address').press('Enter');
+  await page.waitForFunction(()=>document.querySelector('.tab.active .tab-title').textContent.includes('Example Domain'));
+  await app.evaluate(async({webContents})=>{const wc=webContents.getAllWebContents().find(w=>w.getURL()==='https://example.com/');await wc.executeJavaScript(`document.body.innerHTML='<form><input type="email" autocomplete="username"><input type="password" autocomplete="current-password"><button>Login</button></form>'`);});
+  await page.locator('#settings-button').click();
+  await page.locator('.password-row').filter({hasText:'example.org'}).getByText('Заполнить',{exact:true}).click();assert.match(await page.locator('#toast').textContent(),/только на его сайте/);
+  await page.locator('.password-row').filter({hasText:'example.com'}).getByText('Заполнить',{exact:true}).click();
+  await page.waitForSelector('#settings[hidden]',{state:'attached'});
+  assert.equal(await app.evaluate(async({webContents})=>webContents.getAllWebContents().find(w=>w.getURL()==='https://example.com/').executeJavaScript(`document.querySelector('input[type=password]').value==='SYNTHETIC_ONLY_123'&&document.querySelector('input[type=email]').value==='nocturne-test'`)),true);
+  await fs.unlink(csvPath);
+  await page.locator('#address').fill(base);await page.locator('#address').press('Enter');await page.waitForFunction(()=>document.querySelector('.tab.active .tab-title').textContent.includes('Download test'));
+  await app.evaluate(({session,webContents},info)=>{session.fromPartition('persist:nocturne').once('will-download',(_event,item)=>item.setSavePath(info.file));webContents.getAllWebContents().find(w=>w.getURL().startsWith(info.base)).downloadURL(info.base+'/download');},{base,file:path.join(profile,'nocturne-test.txt')});
+  await page.locator('#downloads-button').click();await page.waitForSelector('.download-row progress');
+  await page.getByText('Пауза',{exact:true}).click();await page.waitForFunction(()=>document.querySelector('.download-row small').textContent.includes('На паузе'));
+  await page.getByText('Продолжить',{exact:true}).click();await page.waitForFunction(()=>document.querySelector('.download-row small').textContent.includes('Готово'));
+  assert.equal((await fs.stat(path.join(profile,'nocturne-test.txt'))).size,80*16384);
+  await app.evaluate(({shell})=>{shell.openPath=async file=>{global.__opened=file;return '';};shell.showItemInFolder=file=>{global.__revealed=file;};});
+  await page.getByText('Открыть ↗',{exact:true}).click();await page.getByText('В папке',{exact:true}).click();
+  assert.equal(await app.evaluate(()=>global.__opened===global.__revealed&&global.__opened.endsWith('nocturne-test.txt')),true);
+  await settle(page);await page.screenshot({path:'artifacts/downloads.png'});assert.deepEqual(errors,[]);
+  await app.close();app=await launch();page=await app.firstWindow();await page.waitForSelector('.tab');
+  assert.match(await page.locator('#quick-links').textContent(),/Renamed/);
+  await page.locator('.add-quick-link').click();await page.locator('.link-row').filter({hasText:'Renamed'}).locator('[title="Удалить ссылку"]').click();assert.equal(await page.locator('#quick-links').textContent().then(t=>t.includes('Renamed')),false);await page.locator('#close-links').click();
+  await page.locator('#settings-button').click();await page.locator('[data-section="general"]').click();assert.equal(await page.locator('#search-engine').inputValue(),'duckduckgo');await page.locator('[data-section="passwords"]').click();await page.waitForFunction(()=>document.querySelectorAll('.password-row').length===2);
+  await page.locator('.password-row').filter({hasText:'example.org'}).locator('[title="Удалить пароль"]').click();await page.waitForFunction(()=>document.querySelectorAll('.password-row').length===1);
+  await page.locator('#close-settings').click();await page.locator('#downloads-button').click();await page.waitForSelector('.download-row');assert.match(await page.locator('.download-row').textContent(),/Готово/);
+  await page.locator('.download-row [title="Убрать из списка, сохранив файл"]').click();await page.waitForSelector('.empty-state');assert.equal((await fs.stat(path.join(profile,'nocturne-test.txt'))).size,80*16384);
+  console.log('PASS: editable/reordered/persisted links; CSV dialog import + dedup; Windows encrypted vault + persistence + delete; exact-origin password filling; real download + pause/resume + open/reveal + history persistence');
+ }finally{await app.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

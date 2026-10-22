@@ -1,0 +1,35 @@
+{
+  "name": "nocturne-browser",
+  "version": "0.10.0",
+  "private": true,
+  "description": "A glass and graphite Chromium browser",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "test:smoke": "node smoke.cjs",
+    "test:features": "node features.cjs",
+    "test:layout": "node layout-smoke.cjs",
+    "test:suggestions": "node suggestions-smoke.cjs",
+    "test:setup": "node onboarding-smoke.cjs",
+    "test:bilingual": "node bilingual-smoke.cjs",
+    "package": "node scripts/package.mjs",
+    "test:security": "node security-smoke.cjs",
+    "test:controls": "node controls-smoke.cjs",
+    "test:overlays": "node overlay-smoke.cjs",
+    "test:recovery": "node recovery-smoke.cjs",
+    "test:profiles": "node profiles-smoke.cjs",
+    "test:auto-import": "node automatic-import-smoke.cjs",
+    "installer": "node scripts/build-installer.mjs",
+    "test:installer": "node scripts/verify-installer.mjs"
+  },
+  "devDependencies": {
+    "@electron/fuses": "^2.1.3",
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.0.0",
+    "playwright-core": "^1.64.1"
+  },
+  "dependencies": {
+    "tldts": "^7.4.19"
+  }
+}

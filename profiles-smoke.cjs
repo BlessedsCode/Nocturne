@@ -1,0 +1,49 @@
+const {_electron:electron}=require('playwright-core');
+const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs/promises'),http=require('node:http');
+(async()=>{
+ const root=path.resolve('artifacts','profiles-test-'+Date.now()),personalDir=path.join(root,'profiles','personal');
+ const server=http.createServer((req,res)=>{res.writeHead(200,{'content-type':'text/html'});res.end('<title>'+req.url+'</title><h1>Profile isolation</h1>');});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
+ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+ const app=await require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+root],env});let personal;
+ const command=(page,name,value)=>page.evaluate(({name,value})=>window.browser.command(name,value),{name,value});
+ async function visit(page,url){await page.locator('#address').blur();await page.evaluate(url=>go(url),url);await page.waitForFunction(url=>state.tabs.some(tab=>tab.id===state.active&&tab.url===url&&!tab.loading),url);}
+ try{
+  const page=await app.firstWindow(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.waitForSelector('.tab');
+  for(const part of ['one','two','three'])await visit(page,base+'/'+part);
+  await page.locator('#settings-button').click();await page.locator('[data-section=history]').click();await page.waitForFunction(()=>document.querySelectorAll('.history-row').length===3);
+  await page.evaluate(()=>Promise.all(document.getAnimations().map(animation=>animation.finished.catch(()=>{}))));await page.screenshot({path:'artifacts/history-controls.png'});
+  await page.locator('.history-row').filter({hasText:base+'/one'}).locator('[title="Удалить запись"]').click();await page.waitForFunction(()=>document.querySelectorAll('.history-row').length===2);
+  await page.locator('.history-row>input').first().check();await page.locator('#history-delete-selected').click();await page.waitForFunction(()=>document.querySelectorAll('.history-row').length===1);
+  await page.locator('#history-search').fill('two');await page.locator('#history-select-all').check();assert.match(await page.locator('#history-delete-selected').textContent(),/\(1\)/);await page.locator('#history-search').fill('');
+  // Import a synthetic Zen export through the actual native-file-dialog route.
+  const csv=path.join(root,'synthetic-zen.csv');await fs.writeFile(csv,'"url","username","password","httpRealm","formActionOrigin","guid"\r\n"https://zen.example/login","test-user","SYNTHETIC_ONLY;\"\"pw","","https://zen.example","test"');
+  await app.evaluate(({dialog},file)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[file]});},csv);
+  const imported=await command(page,'passwords-import');assert.equal(imported.added,1);assert.equal((await command(page,'passwords-list')).length,1);assert.equal((await fs.readFile(path.join(root,'passwords.enc'))).includes(Buffer.from('SYNTHETIC_ONLY')),false);
+  await app.evaluate(async({session},url)=>session.fromPartition('persist:nocturne').cookies.set({url,name:'main-cookie',value:'main'}),base);
+  await page.evaluate(()=>{links=[{id:'only-main',name:'Only main',url:'https://example.com/',home:true,sidebar:true}];persistLinks();});
+  // Verify the real profile launcher constructs isolated arguments; avoid leaving a child behind.
+  await app.evaluate(()=>{const childProcess=process.getBuiltinModule('node:child_process'),{EventEmitter}=process.getBuiltinModule('node:events');childProcess.spawn=(exe,args)=>{global.__profileLaunch={exe,args};const child=new EventEmitter();child.unref=()=>{};setImmediate(()=>child.emit('spawn'));return child;};});
+  assert.equal(await page.locator('#profile-switch,#profiles-dialog').count(),0);assert.equal(await page.locator('#profile-secret-entry').getAttribute('tabindex'),'-1');
+  await page.locator('[data-section=about]').click();await page.waitForFunction(()=>!document.getElementById('profile-secret-entry').hidden);
+  const hotspot=await page.locator('#profile-secret-entry').boundingBox();assert(hotspot&&hotspot.width===84);assert.equal(await page.locator('#profile-secret-entry').evaluate(node=>getComputedStyle(node).opacity),'0');
+  await page.mouse.click(hotspot.x+42,hotspot.y+32);assert.equal(await app.evaluate(()=>global.__profileLaunch),undefined);
+  await page.mouse.dblclick(hotspot.x+42,hotspot.y+32);await page.waitForTimeout(50);const launch=await app.evaluate(()=>global.__profileLaunch);assert(launch.args.includes('--user-data-dir='+personalDir));assert(launch.args.includes('--nocturne-root='+root));
+  await page.locator('[data-section=general]').click();assert.equal(await page.locator('#profile-secret-entry').evaluate(node=>node.hidden),true);await page.locator('#close-settings').click();
+  personal=await electron.launch({args:launch.args,env});const privatePage=await personal.firstWindow();privatePage.on('pageerror',error=>errors.push(error.message));await privatePage.waitForSelector('.tab');assert.equal(await privatePage.locator('body').getAttribute('data-profile'),'personal');assert.equal(await privatePage.locator('.quick-link,.rail-link').count(),0);assert.equal(await privatePage.locator('#welcome-dialog').isVisible(),false);
+  assert.deepEqual(await command(privatePage,'history-list'),[]);assert.deepEqual(await command(privatePage,'passwords-list'),[]);assert.equal((await command(privatePage,'settings-get')).searchSuggestions,false);
+  assert.equal(await personal.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getTitle()),'Nocturne');
+  await personal.evaluate(({BrowserWindow})=>{const window=BrowserWindow.getAllWindows()[0],original=window.setOpacity.bind(window);global.__opacity=[];window.setOpacity=value=>{global.__opacity.push(value);original(value);};window.webContents.send('browser-action','profile-enter');});
+  await privatePage.waitForSelector('#profile-entry-veil');assert.equal(await privatePage.locator('.profile-entry-age').textContent(),'18+');assert.equal(await privatePage.locator('.profile-entry-only').textContent(),'ONLY');await privatePage.waitForTimeout(850);await privatePage.screenshot({path:'artifacts/profile-entry-warning.png'});await privatePage.waitForFunction(()=>!document.getElementById('profile-entry-veil'));
+  const fade=await personal.evaluate(({BrowserWindow})=>({values:global.__opacity,visible:BrowserWindow.getAllWindows()[0].isVisible(),opacity:BrowserWindow.getAllWindows()[0].getOpacity()}));assert(fade.values.length>2);assert(fade.values[0]<1);assert.equal(fade.values.at(-1),1);assert.equal(fade.visible,true);assert.equal(fade.opacity,1);
+  await privatePage.evaluate(()=>{preferences.animations=false;applyPreferences();});await personal.evaluate(({BrowserWindow})=>{global.__opacity=[];BrowserWindow.getAllWindows()[0].webContents.send('browser-action','profile-enter');});await privatePage.waitForTimeout(100);assert.deepEqual(await personal.evaluate(()=>global.__opacity),[1]);assert.equal(await privatePage.locator('#profile-entry-veil.still').count(),1);await privatePage.waitForFunction(()=>!document.getElementById('profile-entry-veil'));
+  await privatePage.evaluate(()=>{preferences.animations=true;applyPreferences();});
+  const storage=await personal.evaluate(({session})=>session.fromPartition('persist:nocturne').getStoragePath());assert(storage.startsWith(personalDir));
+  assert.deepEqual(await personal.evaluate(({session},url)=>session.fromPartition('persist:nocturne').cookies.get({url}),base),[]);
+  await visit(privatePage,base+'/personal');assert.equal((await command(privatePage,'history-list')).length,1);assert.equal((await command(page,'history-list')).length,1);assert.equal(await page.locator('.quick-link').count(),1);assert.equal((await command(privatePage,'suggestion-history')).history[0].url,base+'/personal');
+  await personal.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.send('browser-action','profile-enter'));await privatePage.waitForSelector('#profile-entry-veil');await privatePage.waitForTimeout(100);assert.equal(await personal.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].contentView.children[0].getVisible()),false);await privatePage.waitForFunction(()=>!document.getElementById('profile-entry-veil'));await privatePage.waitForTimeout(50);assert.equal(await personal.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].contentView.children[0].getVisible()),true);
+  await app.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:1});});await page.locator('#settings-button').click();await page.locator('[data-section=history]').click();await page.locator('#history-delete-all').click();await page.waitForFunction(()=>document.querySelectorAll('.history-row').length===0);assert.equal((await command(privatePage,'history-list')).length,1);
+  await privatePage.screenshot({path:'artifacts/personal-profile.png'});
+  await personal.close();personal=await electron.launch({args:launch.args,env});const restarted=await personal.firstWindow();await restarted.waitForSelector('.tab');assert.equal((await command(restarted,'history-list')).length,1);assert.equal(await restarted.locator('.quick-link,.rail-link').count(),0);assert.equal((await command(page,'history-list')).length,0);assert.deepEqual(errors,[]);
+  console.log('PASS: single and selected history deletion; filtered select-all; confirmed clear-all; real synthetic Zen CSV import and Windows encryption; profile launcher; independent cookies, history, password vault, pins and suggestions; isolated storage paths; personal profile persistence without onboarding');
+ }finally{if(personal)await personal.close();await app.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(error=>{console.error(error);process.exitCode=1;});

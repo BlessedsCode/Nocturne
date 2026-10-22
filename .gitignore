@@ -1,0 +1,22 @@
+node_modules/
+.tools/
+artifacts/
+release/
+.env
+.env.*
+!.env.example
+*.enc
+*.csv
+*.sqlite
+*.db
+*.db-wal
+*.db-shm
+browser-settings.json
+history.json
+tabs.json
+downloads.json
+passwords.json
+logins.json
+Local State
+Login Data*
+assets/reference.jpg

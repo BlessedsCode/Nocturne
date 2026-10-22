@@ -1,0 +1,28 @@
+const fs=require('node:fs');
+const path=require('node:path');
+function setupFavicons({directory,fetch}){
+ const file=path.join(directory,'favicons.json');let cache={};try{cache=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
+ const pending=new Map();
+ async function read(url,limit){
+  const response=await fetch(url,{signal:AbortSignal.timeout(7000),credentials:'omit',redirect:'follow'});
+  const finalURL=response.url||url;
+  if(!response.ok||!/^https?:\/\//i.test(finalURL))throw new Error('unavailable');
+  const reader=response.body.getReader(),chunks=[];let size=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit)break;chunks.push(Buffer.from(value));}}finally{await reader.cancel().catch(()=>{});}
+  return {bytes:Buffer.concat(chunks),type:response.headers.get('content-type')||'',url:finalURL};
+ }
+ const unescape=s=>s.replace(/&amp;/g,'&').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
+ async function discover(origin){
+  const candidates=[];
+  try{const page=await read(origin,262144);const html=page.bytes.toString('utf8');for(const tag of html.match(/<link\b[^>]*>/gi)||[]){const attrs={};for(const match of tag.matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g))attrs[match[1].toLowerCase()]=match[2]??match[3]??match[4];if(/(?:^|\s)(?:icon|apple-touch-icon)(?:\s|$)/i.test(attrs.rel||'')&&attrs.href){const url=new URL(unescape(attrs.href),page.url);if(['http:','https:'].includes(url.protocol))candidates.push(url.href);}}}catch{}
+  candidates.push(origin+'/favicon.ico');
+  for(const url of [...new Set(candidates)].slice(0,5))try{const image=await read(url,524288);if(!image.bytes.length)continue;const type=image.type.split(';')[0].toLowerCase();if(!/^image\/(png|jpeg|gif|webp|svg\+xml|x-icon|vnd.microsoft.icon|avif)$/.test(type))continue;const icon='data:'+type+';base64,'+image.bytes.toString('base64');cache[origin]=icon;const keys=Object.keys(cache);if(keys.length>300)delete cache[keys[0]];fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(file,JSON.stringify(cache));return icon;}catch{}
+  return '';
+ }
+ async function get(url){let origin;try{const parsed=new URL(url);if(!['https:','http:'].includes(parsed.protocol))return '';origin=parsed.origin;}catch{return '';}
+  if(cache[origin])return cache[origin];if(pending.has(origin))return pending.get(origin);
+  const promise=discover(origin);pending.set(origin,promise);try{return await promise;}finally{pending.delete(origin);}
+ }
+ return {get};
+}
+module.exports={setupFavicons};
