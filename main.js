@@ -157,12 +157,12 @@ function attachBrowserControls(wc,isShell=false){
  wc.on('found-in-page',(_event,result)=>{if(wc===findTarget&&result.requestId===findRequest)win.webContents.send('page-find-result',{matches:result.matches,activeMatchOrdinal:result.activeMatchOrdinal});});
  wc.on('context-menu',(event,params)=>{
   // Pinned-link menus are owned by the shell renderer; native editing menus remain here.
-  if(isShell&&!params.isEditable&&!params.selectionText)return;
+  if(isShell&&!params.isEditable&&!params.selectionText&&!params.linkURL)return;
   event.preventDefault();
   const wrap=callback=>(...args)=>{if(wc.isDestroyed())return;Promise.resolve().then(()=>callback(...args)).catch(reportError);};
   const engine=engines.find(engine=>engine.id===profile.preferences.searchEngine)||engines[0];
   const actions={engineName:engine.name,edit:method=>wc[method](),replaceWord:word=>wc.replaceMisspelling(word),copy:value=>clipboard.writeText(value),
-   openTab:wrap(url=>newTab(url)),download:wrap(url=>wc.downloadURL(url)),copyImage:wrap((x,y)=>wc.copyImageAt(x,y)),
+   openTab:wrap(url=>newTab(url)),openWindow:wrap(url=>newTab(url)),download:wrap(url=>wc.downloadURL(url)),copyImage:wrap((x,y)=>wc.copyImageAt(x,y)),
    search:wrap(text=>newTab(searchURL(engine.id,text.slice(0,1500)))),translate:wrap(async text=>{const translated=await translateEnglish(text,(...args)=>net.fetch(...args));await dialog.showMessageBox(win,{type:'info',title:'Перевод на английский',message:translated||text,buttons:['Закрыть','Копировать'],defaultId:0}).then(result=>{if(result.response===1)clipboard.writeText(translated||text);});}),
    back:()=>wc.navigationHistory.goBack(),forward:()=>wc.navigationHistory.goForward(),canBack:wc.navigationHistory.canGoBack(),canForward:wc.navigationHistory.canGoForward(),reload:()=>wc.reload(),
    print:wrap(()=>wc.print({silent:false,printBackground:true})),screenshot:wrap(()=>saveScreenshot(wc)),source:wrap(()=>showSource(wc)),inspect:wrap((x,y)=>wc.inspectElement(x,y))};
@@ -177,15 +177,16 @@ function layout() {
     t.view.setBounds({x:76,y:112,width:Math.max(1,width-88),height:Math.max(1,height-124)});
   }
 }
-function newTab(url) {
+function newTab(url, options = {}) {
   closePageFind(false);
   if(tabs.size>=40)return {error:'Открыто слишком много вкладок. Закрой ненужные.'};
   const previous=active;
+  const inBackground=!!(options.background||(url&&profile?.preferences.backgroundTabs));
   const t = {id:++nextId,title:'Новая вкладка',url:'',view:null,error:null};
   tabs.set(t.id,t); active=t.id;
   if(url) navigate(url); else {layout();state();}
-  if(url&&profile?.preferences.backgroundTabs&&previous){active=previous;layout();state();}
-  focusActiveTab();if(!url)win.webContents.send('focus-address');
+  if(inBackground&&previous){active=previous;layout();state();}
+  if(!inBackground){focusActiveTab();if(!url)win.webContents.send('focus-address');}
 }
 function navigate(input) {
   let url;
@@ -200,7 +201,15 @@ function navigate(input) {
     const wc=t.view.webContents;
     wc.setZoomFactor(profile.preferences.zoom/100);
     let popupTimes=[];
-    wc.setWindowOpenHandler(({url})=>{popupTimes=popupTimes.filter(time=>Date.now()-time<60000);if(/^https?:\/\//i.test(url)&&popupTimes.length<5){popupTimes.push(Date.now());newTab(url);}else security.record(url,'popup');return {action:'deny'};});
+    wc.setWindowOpenHandler(({url,disposition})=>{
+      popupTimes=popupTimes.filter(time=>Date.now()-time<60000);
+      const isUserClick=disposition==='background-tab'||disposition==='new-window'||disposition==='foreground-tab';
+      if(/^https?:\/\//i.test(url)&&(isUserClick||popupTimes.length<30)){
+        if(!isUserClick)popupTimes.push(Date.now());
+        newTab(url,{background:disposition==='background-tab'});
+      }else security.record(url,'popup');
+      return {action:'deny'};
+    });
     wc.on('will-navigate',(event,url)=>{if(!/^https?:\/\//i.test(url))event.preventDefault();});
     wc.on('will-redirect',(event,url)=>{if(!/^https?:\/\//i.test(url))event.preventDefault();});
     wc.on('page-title-updated',(_event,title)=>{t.title=title;state();});
@@ -251,11 +260,15 @@ app.whenReady().then(async()=>{
   const originOf=value=>{try{return new URL(value).origin;}catch{return '';}};
   sites.setPermissionRequestHandler(async(wc,permission,callback,details)=>{
     if(!wc||wc.isDestroyed()||!details){callback(false);return;}
+    if(permission==='clipboard-sanitized-write'||permission==='clipboard-write'){callback(true);return;}
     const origin=originOf(details.requestingUrl||wc.getURL());const currentOrigin=originOf(wc.getURL());
     if(details.isMainFrame===false||!['media','notifications','geolocation'].includes(permission)||profile.preferences[permission]!=='ask'||!origin.startsWith('https://')||origin!==currentOrigin){callback(false);return;}
     try{const labels={media:'камере и микрофону',notifications:'уведомлениям',geolocation:'местоположению'};const result=await dialog.showMessageBox(win,{type:'question',title:'Разрешение сайта',message:`Разрешить ${origin} доступ к ${labels[permission]}?`,buttons:['Запретить','Разрешить на этот запуск'],defaultId:0,cancelId:0});const allow=result.response===1&&!wc.isDestroyed()&&originOf(wc.getURL())===origin;if(allow)grants.add(origin+'|'+permission);callback(allow);}catch{callback(false);}
   });
-  sites.setPermissionCheckHandler((_wc,permission,origin)=>profile.preferences[permission]==='ask'&&grants.has(originOf(origin)+'|'+permission));
+  sites.setPermissionCheckHandler((_wc,permission,origin)=>{
+    if(permission==='clipboard-sanitized-write'||permission==='clipboard-write')return true;
+    return profile.preferences[permission]==='ask'&&grants.has(originOf(origin)+'|'+permission);
+  });
   sites.webRequest.onBeforeSendHeaders((details,callback)=>{if(profile.preferences.doNotTrack)details.requestHeaders.DNT='1';callback({requestHeaders:details.requestHeaders});});
   win=new BrowserWindow({width:1480,height:960,minWidth:1000,minHeight:700,show:profileMode!=='personal',frame:false,backgroundColor:'#111114',title:'Nocturne',webPreferences:{preload:path.join(__dirname,'preload.js'),additionalArguments:['--nocturne-profile='+profileMode],contextIsolation:true,nodeIntegration:false,sandbox:true}});
   if(profileMode==='personal')win.once('ready-to-show',()=>tell('profile-enter'));
@@ -263,7 +276,7 @@ app.whenReady().then(async()=>{
   combinedSearch=new CombinedSearch({translate:(query,signal)=>translateEnglish(query,(...args)=>net.fetch(...args),signal),createView:()=>new WebContentsView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,partition:'persist:nocturne'}}),notify:data=>{if(win&&!win.isDestroyed())win.webContents.send('combined-search',data);}});
   win.loadFile('index.html');
   win.webContents.on('will-navigate',event=>event.preventDefault());
-  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  win.webContents.setWindowOpenHandler(({url})=>{if(/^https?:\/\//i.test(url)){newTab(url);return {action:'deny'};}return {action:'deny'};});
   attachBrowserControls(win.webContents,true);
   win.webContents.on('will-attach-webview',event=>event.preventDefault());
   win.webContents.on('did-finish-load',()=>{profileIntroduction=false;requestOverlay(false);if(tabs.size){layout();state();return;}const restore=profile.preferences.restoreSession?profile.lastSession:[];for(const url of restore)if(/^https?:\/\//i.test(url))newTab(url);if(!tabs.size)newTab();});
@@ -334,7 +347,7 @@ app.whenReady().then(async()=>{
     }
     if(action==='link-menu'&&typeof value?.id==='string'){
       const send=kind=>win.webContents.send('link-action',{id:value.id,kind});
-      Menu.buildFromTemplate([{label:'Открыть в новой вкладке',click:()=>send('open')},{type:'separator'},{label:'Открепить с главной',click:()=>send('home')},{label:'Открепить с боковой панели',click:()=>send('sidebar')},{label:'Изменить ссылку',click:()=>send('edit')},{type:'separator'},{label:'Удалить ссылку',click:()=>send('delete')}]).popup({window:win});return;
+      Menu.buildFromTemplate([{label:'Открыть в новой вкладке',click:()=>send('open')},{label:'Копировать адрес ссылки',click:()=>send('copy')},{type:'separator'},{label:'Открепить с главной',click:()=>send('home')},{label:'Открепить с боковой панели',click:()=>send('sidebar')},{label:'Изменить ссылку',click:()=>send('edit')},{type:'separator'},{label:'Удалить ссылку',click:()=>send('delete')}]).popup({window:win});return;
     }
     if(action==='downloads')return await downloads.command(value?.action,value?.id);
     if(action==='passwords-list')return await vault.list();
@@ -393,6 +406,15 @@ app.whenReady().then(async()=>{
     if(action==='new')newTab();
     if(action==='switch'&&tabs.has(value)){closePageFind(false);active=value;layout();state();focusActiveTab();}
     if(action==='close-tab')closeTab(value);
+    if(action==='reorder-tabs'&&Array.isArray(value)){
+      const reordered=new Map();
+      for(const id of value){if(tabs.has(id))reordered.set(id,tabs.get(id));}
+      for(const [id,tab] of tabs){if(!reordered.has(id))reordered.set(id,tab);}
+      tabs.clear();
+      for(const [id,tab] of reordered)tabs.set(id,tab);
+      state();
+      return {reordered:true};
+    }
     if(action==='back'&&wc?.navigationHistory.canGoBack())wc.navigationHistory.goBack();
     if(action==='forward'&&wc?.navigationHistory.canGoForward())wc.navigationHistory.goForward();
     if(action==='reload'&&current()?.url)navigate(current().url);

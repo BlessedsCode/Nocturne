@@ -34,8 +34,9 @@ function contextTemplate(params,actions){
   add('copy','Копировать',()=>actions.edit('copy'),flags.canCopy!==false,'Ctrl+C');add('select-all','Выделить всё',()=>actions.edit('selectAll'),true,'Ctrl+A');
  }
  if(params.linkURL){
-  separator();if(httpURL(params.linkURL)){add('open-link','Открыть ссылку в новой вкладке',()=>actions.openTab(params.linkURL));add('save-link','Сохранить ссылку как…',()=>actions.download(params.linkURL));}
+  separator();if(httpURL(params.linkURL)){add('open-link','Открыть ссылку в новой вкладке',()=>actions.openTab(params.linkURL));add('open-link-window','Открыть ссылку в новом окне',()=>actions.openWindow?actions.openWindow(params.linkURL):actions.openTab(params.linkURL));add('save-link','Сохранить ссылку как…',()=>actions.download(params.linkURL));}
   add('copy-link','Копировать адрес ссылки',()=>actions.copy(params.linkURL));
+  if(params.linkText?.trim())add('copy-link-text','Копировать текст ссылки',()=>actions.copy(params.linkText.trim()));
  }
  if(params.mediaType==='image'){
   separator();if(httpURL(params.srcURL)){add('open-image','Открыть изображение в новой вкладке',()=>actions.openTab(params.srcURL));add('save-image','Сохранить изображение как…',()=>actions.download(params.srcURL));add('copy-image-url','Копировать адрес изображения',()=>actions.copy(params.srcURL));}

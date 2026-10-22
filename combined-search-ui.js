@@ -45,7 +45,7 @@
   if(notices.length){const details=document.createElement('details');details.className='combined-unavailable';const summary=element('summary','Источники с ограничениями · '+notices.length);details.append(summary,...notices);details.open=filter!=='all'||!results.length;list.append(details);}
   if(!results.length&&current.done)list.append(element('p','Нет результатов для этого фильтра. Можно открыть обычную выдачу источника.'));
   for(const result of results){
-   const article=element('article','','combined-result');const title=element('button',result.title,'combined-title');title.onclick=()=>go(result.url);
+   const article=element('article','','combined-result');const title=element('button',result.title,'combined-title');title.onclick=()=>go(result.url);title.onauxclick=event=>{if(event.button===1){event.preventDefault();action('open-tab',result.url);}};title.oncontextmenu=event=>{event.preventDefault();navigator.clipboard.writeText(result.url);toast('Адрес ссылки скопирован');};
    let host=result.url;try{host=new URL(result.url).hostname;}catch{}
    const address=element('div','','combined-address');address.append(favicon('',result.url,result.title),element('span',host));
    const badges=element('div','','combined-sources');for(const source of result.sources){const languages=(source.languages||['original']).map(language=>language==='en'?'EN':'Исходный').join('/');const badge=element('button',source.name+' · '+languages+' · №'+source.rank);badge.title='Показать результаты '+source.name;badge.onclick=()=>{filter=source.id;draw();};badges.append(badge);}

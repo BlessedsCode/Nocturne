@@ -79,6 +79,7 @@
    if(item.kind==='site'){const host=document.createElement('small');try{host.textContent=new URL(item.url).hostname;}catch{}row.append(host);}
    else if(item.typed){const hint=document.createElement('small');hint.textContent='Enter';row.append(hint);}
    row.addEventListener('pointerdown',event=>event.preventDefault());row.onclick=()=>choose(item);
+   row.onauxclick=event=>{if(event.button===1&&item.url){event.preventDefault();action('open-tab',item.url);}};
    row.addEventListener('pointermove',()=>{selected=index;mark(false);});
    const option=document.createElement('div');option.className='suggestion-option';option.append(row);
    if(item.kind==='site'&&item.group==='Часто'){

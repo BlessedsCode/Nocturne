@@ -15,5 +15,8 @@ test('context menu respects passwords and edit flags, supports selected text, li
  const password=contextTemplate({isEditable:true,formControlType:'input-password',selectionText:'private',editFlags:{canCopy:true,canCut:true,canPaste:true}},actions);
  assert(!password.some(item=>item.id==='search-selection'||item.id==='translate-selection'));assert.equal(password.find(item=>item.id==='copy').enabled,false);assert.equal(password.find(item=>item.id==='paste').enabled,true);
  const image=contextTemplate({mediaType:'image',srcURL:'https://example.com/img.png',hasImageContents:true,x:5,y:9},actions);image.find(item=>item.id==='inspect').click();assert.deepEqual(called.pop(),['inspect',5,9]);assert(image.some(item=>item.id==='save-image'));
- const unsafe=contextTemplate({linkURL:'file:///C:/private.txt'},actions);assert(!unsafe.some(item=>item.id==='open-link'||item.id==='save-link'));
+ const linkMenu=contextTemplate({linkURL:'https://example.com/item',linkText:'Click Here'},actions);
+ assert(linkMenu.some(item=>item.id==='open-link'));assert(linkMenu.some(item=>item.id==='open-link-window'));
+ assert(linkMenu.some(item=>item.id==='copy-link-text'));
+ const unsafe=contextTemplate({linkURL:'file:///C:/private.txt'},actions);assert(!unsafe.some(item=>item.id==='open-link'||item.id==='open-link-window'||item.id==='save-link'));
 });

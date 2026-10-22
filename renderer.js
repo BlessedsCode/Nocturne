@@ -59,9 +59,83 @@ async function panel(id){
   if(id==='settings'&&!$('passwords-section').hidden)loadPasswords();
   if(id==='settings'&&typeof loadBrowserSettings==='function')loadBrowserSettings();
 }
+let draggedTabId=null,wasDraggingTab=false;
 function render(s){
   state=s;const signature=JSON.stringify([s.tabs,s.active]);
-  if(signature!==tabSignature){tabSignature=signature;$('tabs').replaceChildren();for(const t of s.tabs){const tab=document.createElement('div');tab.className='tab'+(t.id===s.active?' active':'')+(t.loading?' tab-loading':'');tab.append(favicon(t.favicon,t.url,t.title),text('span',t.title,'tab-title'),button('×','Закрыть вкладку',e=>{e.stopPropagation();command('close-tab',t.id);}));tab.onclick=async()=>{await closePanels();command('switch',t.id);};$('tabs').append(tab);}}
+  if(signature!==tabSignature){
+    tabSignature=signature;
+    $('tabs').replaceChildren();
+    for(const t of s.tabs){
+      const tab=document.createElement('div');
+      tab.className='tab'+(t.id===s.active?' active':'')+(t.loading?' tab-loading':'');
+      tab.draggable=true;
+      tab.append(favicon(t.favicon,t.url,t.title),text('span',t.title,'tab-title'),button('×','Закрыть вкладку',e=>{e.stopPropagation();command('close-tab',t.id);}));
+      tab.onclick=async()=>{
+        if(wasDraggingTab){wasDraggingTab=false;return;}
+        await closePanels();
+        command('switch',t.id);
+      };
+      tab.onauxclick=e=>{
+        if(e.button===1){
+          e.preventDefault();
+          e.stopPropagation();
+          command('close-tab',t.id);
+        }
+      };
+      tab.onmousedown=e=>{
+        if(e.button===1){
+          e.preventDefault();
+        }
+      };
+      tab.ondragstart=e=>{
+        draggedTabId=t.id;
+        wasDraggingTab=true;
+        e.dataTransfer.setData('text/plain',String(t.id));
+        e.dataTransfer.effectAllowed='move';
+        tab.classList.add('tab-dragging');
+      };
+      tab.ondragend=()=>{
+        draggedTabId=null;
+        tab.classList.remove('tab-dragging');
+        document.querySelectorAll('.tab').forEach(el=>el.classList.remove('drag-over-before','drag-over-after'));
+        setTimeout(()=>{wasDraggingTab=false;},100);
+      };
+      tab.ondragover=e=>{
+        e.preventDefault();
+        e.dataTransfer.dropEffect='move';
+        const rect=tab.getBoundingClientRect();
+        if(e.clientX < rect.left + rect.width / 2){
+          tab.classList.add('drag-over-before');
+          tab.classList.remove('drag-over-after');
+        } else {
+          tab.classList.add('drag-over-after');
+          tab.classList.remove('drag-over-before');
+        }
+      };
+      tab.ondragleave=()=>{
+        tab.classList.remove('drag-over-before','drag-over-after');
+      };
+      tab.ondrop=e=>{
+        e.preventDefault();
+        e.stopPropagation();
+        tab.classList.remove('drag-over-before','drag-over-after');
+        const srcId=Number(e.dataTransfer.getData('text/plain')||draggedTabId);
+        const targetId=t.id;
+        if(!srcId||srcId===targetId)return;
+        const rect=tab.getBoundingClientRect();
+        const before=e.clientX < rect.left + rect.width / 2;
+        const ids=state.tabs.map(item=>item.id);
+        const srcIdx=ids.indexOf(srcId);
+        if(srcIdx===-1)return;
+        ids.splice(srcIdx,1);
+        const targetIdx=ids.indexOf(targetId);
+        if(targetIdx===-1)return;
+        ids.splice(before?targetIdx:targetIdx+1,0,srcId);
+        command('reorder-tabs',ids);
+      };
+      $('tabs').append(tab);
+    }
+  }
   const t=s.tabs.find(t=>t.id===s.active);if(document.activeElement!==$('address'))$('address').value=t?.url||'';
   $('back').disabled=!s.back;$('forward').disabled=!s.forward;document.body.classList.toggle('error',!!t?.error);$('error-page').hidden=!t?.error;$('error-message').textContent=t?.error?'Не удалось открыть страницу. '+t.error:'';
   setButtonIcon($('bookmark'),saved.some(b=>b.url===t?.url)?'star-filled':'star');
@@ -86,7 +160,7 @@ $('retry').onclick=async()=>{await closePanels();command('reload');};$('error-ho
 $('bookmark').onclick=()=>{const t=state.tabs.find(t=>t.id===state.active);if(!t?.url)return toast('Сначала открой сайт');const index=saved.findIndex(b=>b.url===t.url);if(index>=0)saved.splice(index,1);else saved.push({title:t.title,url:t.url,favicon:t.favicon||''});localStorage.setItem('favorites',JSON.stringify(saved));render(state);toast(index>=0?'Удалено из избранного':'Добавлено в избранное');};
 function renderFavorites(){
   $('favorites-list').replaceChildren();if(!saved.length)$('favorites-list').append(text('p','Сохраняй любимые сайты кнопкой ☆ у адресной строки.'));
-  for(const b of saved){const row=document.createElement('div');row.className='saved-row';const open=button('',b.url,()=>go(b.url),'favorite-open');const info=document.createElement('span');info.className='favorite-info';let host=b.url;try{host=new URL(b.url).hostname;}catch{}info.append(text('strong',b.title||host),text('small',host));open.append(favicon(b.favicon,b.url,b.title||host),info,text('span','↗','favorite-arrow'));
+  for(const b of saved){const row=document.createElement('div');row.className='saved-row';const open=button('',b.url,()=>go(b.url),'favorite-open');open.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',b.url);}};open.oncontextmenu=e=>{e.preventDefault();navigator.clipboard.writeText(b.url);toast('Адрес ссылки скопирован');};const info=document.createElement('span');info.className='favorite-info';let host=b.url;try{host=new URL(b.url).hostname;}catch{}info.append(text('strong',b.title||host),text('small',host));open.append(favicon(b.favicon,b.url,b.title||host),info,text('span','↗','favorite-arrow'));
     row.append(open,button('×','Удалить',()=>{saved=saved.filter(x=>x!==b);localStorage.setItem('favorites',JSON.stringify(saved));renderFavorites();render(state);}));$('favorites-list').append(row);
   }
 }
@@ -94,12 +168,12 @@ function persistLinks(){localStorage.setItem('quick-links',JSON.stringify(links)
 function unpinLink(link,place){link[place]=false;persistLinks();toast(place==='home'?'Откреплено с главной':'Откреплено с боковой панели');}
 function linkMenu(event,link){event.preventDefault();command('link-menu',{id:link.id});}
 function editLink(link){$('link-id').value=link.id;$('link-name').value=link.name;$('link-url').value=link.url;$('link-home').checked=link.home;$('link-sidebar').checked=link.sidebar;$('save-link').textContent='Сохранить';$('cancel-link').hidden=false;$('link-name').focus();}
-api?.onLinkAction(async({id,kind})=>{const link=links.find(l=>l.id===id);if(!link)return;if(kind==='open')command('open-tab',link.url);else if(kind==='edit'){await panel('links-panel');editLink(link);}else if(kind==='delete'){links=links.filter(l=>l.id!==id);persistLinks();}else unpinLink(link,kind);});
+api?.onLinkAction(async({id,kind})=>{const link=links.find(l=>l.id===id);if(!link)return;if(kind==='open')command('open-tab',link.url);else if(kind==='copy'){navigator.clipboard.writeText(link.url);toast('Адрес ссылки скопирован');}else if(kind==='edit'){await panel('links-panel');editLink(link);}else if(kind==='delete'){links=links.filter(l=>l.id!==id);persistLinks();}else unpinLink(link,kind);});
 function renderQuickLinks(){
   $('quick-links').replaceChildren();let rail=$('rail-links');if(!rail){rail=document.createElement('div');rail.id='rail-links';document.querySelectorAll('.rail>[data-url]').forEach(el=>el.remove());document.querySelector('.rail-line').after(rail);}rail.replaceChildren();
   for(const link of links){
-    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);const b=button('',link.url,()=>go(link.url),'quick-open');b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
-    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);const b=button('',link.name,()=>go(link.url),'rail-open');b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
+    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.url,()=>go(link.url),'quick-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
+    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.name,()=>go(link.url),'rail-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
   }
   $('quick-links').append(button('＋','Добавить или изменить быстрые ссылки',()=>panel('links-panel'),'add-quick-link'));
   rail.hidden=!preferences.showSidebarLinks;

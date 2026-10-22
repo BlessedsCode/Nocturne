@@ -1,5 +1,9 @@
 name: Publish Windows installer
 on:
+  # Пуш тега v1.2.3 запускает сборку и публикацию автоматически.
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 permissions:
   contents: write
