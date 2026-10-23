@@ -18,6 +18,7 @@ const {ExtensionsManager}=require('./extensions');
 const {AdBlock}=require('./adblock');
 const {SponsorBlock,videoID}=require('./sponsorblock');
 const {watchEdits,hasDiscardRisk,within}=require('./tab-safety');
+const {liveContents,requestTab}=require('./tab-contents');
 const searchSuggestions=new SearchSuggestions((...args)=>net.fetch(...args));
 const path = require('node:path');
 const {pathToFileURL}=require('node:url');
@@ -41,7 +42,7 @@ function openExternalIntents(){
 }
 let extensionsManager;
 let adBlock,sponsorBlock;
-function refreshContentFilters(){for(const t of tabs.values())if(t.view&&!t.view.webContents.isDestroyed())t.view.webContents.send('content-filter-settings');}
+function refreshContentFilters(){for(const t of tabs.values())liveContents(t)?.send('content-filter-settings');}
 app.enableSandbox();
 app.commandLine.appendSwitch('site-per-process');
 if(app.isPackaged){
@@ -77,7 +78,7 @@ function state(immediate=false) {
     stateScheduled=false;
     if (!win || win.isDestroyed()) return;
     const cur=current();
-    const wc=cur?.view?.webContents;
+    const wc=liveContents(cur);
     win.webContents.send('state', {
       active,
       tabs:[...tabs.values()].map(t => ({
@@ -226,7 +227,11 @@ function layout() {
   if (!win || win.isDestroyed()) return;
   const [width,height] = win.getContentSize();
   for (const t of tabs.values()) if(t.view) {
-    t.view.setVisible(t.id === active && !overlay && !profileIntroduction && !t.error && !t.security);
+    const contents=liveContents(t);if(!contents)continue;
+    const visible=t.id === active && !overlay && !profileIntroduction && !t.error && !t.security;
+    t.view.setVisible(visible);
+    // Native child-view visibility is not always reflected by document.hidden.
+    if(t.contentVisible!==visible){t.contentVisible=visible;contents.send('content-visibility',visible);}
     if(t.id === active && t.htmlFullScreen){
       t.view.setBounds({x:0,y:0,width,height});
     }else{
@@ -310,8 +315,10 @@ function attachTabWebContents(t, url) {
     layout();
     state();
   });
-  wc.on('did-navigate-in-page', (_event, inPageUrl) => {
+  wc.on('did-navigate-in-page', (_event, inPageUrl, isMainFrame) => {
+    if(isMainFrame===false)return;
     t.url = inPageUrl;
+    wc.send('content-page-url');
     state();
   });
   wc.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
@@ -535,7 +542,15 @@ app.whenReady().then(async()=>{
     const error=await shell.openPath(file);if(error)throw new Error('Не удалось открыть установщик.');app.quit();return {started:true};
   }});
   const sites=session.fromPartition('persist:nocturne');
+  sites.registerPreloadScript({type:'frame',filePath:path.join(__dirname,'youtube-adblock.js')});
   const trustedContent=event=>event.sender.session===sites&&[...tabs.values()].some(t=>t.view?.webContents===event.sender);
+  const contentFilterConfig=event=>{
+    const tab=[...tabs.values()].find(t=>t.view?.webContents===event.sender);
+    const frameURL=event.senderFrame?.url||'',topURL=event.senderFrame===event.sender.mainFrame?frameURL:event.sender.getURL();
+    return {ads:!!(trustedContent(event)&&/^https?:\/\//i.test(frameURL)&&adBlock.enabled(topURL)&&adBlock.enabled(frameURL)),visible:!!tab?.contentVisible};
+  };
+  ipcMain.handle('content-filter-config',contentFilterConfig);
+  ipcMain.on('content-filter-bootstrap',event=>{event.returnValue=contentFilterConfig(event);});
   ipcMain.handle('content-cosmetics',(event,tokens)=>{
     if(!trustedContent(event)||!/^https?:\/\//i.test(event.senderFrame?.url||'')||!adBlock.enabled(event.sender.getURL()))return '';
     const clean=value=>Array.isArray(value)?value.slice(0,2000).filter(t=>typeof t==='string'&&t.length<=128):[];
@@ -553,9 +568,9 @@ app.whenReady().then(async()=>{
   downloads=setupDownloads({session:sites,app,shell,security,getPreferences:()=>profile.preferences,getWindow:()=>win,notify:list=>{if(win&&!win.isDestroyed())win.webContents.send('downloads',list);}});
   sites.webRequest.onBeforeRequest((details,callback)=>{
     // Session requests (favicons, workers, fetch) may have no owning WebContents.
-    const requester=Number.isInteger(details.webContentsId)&&details.webContentsId>0?webContents.fromId(details.webContentsId):null;
+    let requester=null;try{if(Number.isInteger(details.webContentsId)&&details.webContentsId>0)requester=webContents.fromId(details.webContentsId);}catch{}
     if(requester?.getType()==='remote'&&/^devtools:\/\/(devtools|theme)\//.test(details.url)){callback({cancel:false});return;}
-    const t=[...tabs.values()].find(tab=>tab.view?.webContents.id===details.webContentsId);
+    const t=requestTab(tabs.values(),details.webContentsId);
     const main=details.resourceType==='mainFrame';
     if(main&&t&&details.method!=='GET')t.hasPostHistory=true;
     security.check(details.url,{main,topURL:t?.url||'',cloud:main}).then(verdict=>{
@@ -621,7 +636,7 @@ app.whenReady().then(async()=>{
     clearInterval(profileRevealTimer);
     if(memorySaverTimer) clearInterval(memorySaverTimer);
     combinedSearch?.cancel();
-    for(const t of tabs.values())t.view?.webContents.close();
+    for(const t of tabs.values())liveContents(t)?.close();
     tabs.clear();
   });
   if(Object.values(security.lists).some(list=>Date.now()-list.updated>8*3600000))security.update().catch(()=>{});
@@ -690,7 +705,7 @@ app.whenReady().then(async()=>{
     }
     if(action==='favicon-get')return {icon:await icons.get(value)};
     if(action==='settings-get')return {...profile.preferences,downloadDirectory:profile.preferences.downloadDirectory||app.getPath('downloads'),versions:{app:app.getVersion(),chromium:process.versions.chrome,electron:process.versions.electron}};
-    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())t.view?.webContents.setZoomFactor(updated.zoom/100);if(['adBlock','sponsorBlock'].some(key=>Object.hasOwn(value||{},key)))refreshContentFilters();return updated;}
+    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())liveContents(t)?.setZoomFactor(updated.zoom/100);if(['adBlock','sponsorBlock'].some(key=>Object.hasOwn(value||{},key)))refreshContentFilters();return updated;}
     if(action==='choose-download-directory'){const chosen=await dialog.showOpenDialog(win,{title:'Папка для загрузок',defaultPath:profile.preferences.downloadDirectory||app.getPath('downloads'),properties:['openDirectory','createDirectory']});if(chosen.canceled)return {canceled:true};profile.preferences.downloadDirectory=chosen.filePaths[0];profile.write('browser-settings.json',profile.preferences);return {directory:chosen.filePaths[0]};}
     if(action==='history-list')return profile.history;
     if(action==='history-delete'){

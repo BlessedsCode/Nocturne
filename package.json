@@ -1,6 +1,6 @@
 {
   "name": "nocturne-browser",
-  "version": "0.10.9",
+  "version": "0.10.11",
   "private": true,
   "description": "A glass and graphite Chromium browser",
   "main": "main.js",
