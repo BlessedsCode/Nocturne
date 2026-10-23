@@ -48,5 +48,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $installer = "release/Nocturne-Setup-$env:RELEASE_VERSION-x64.exe"
-          gh release create "v$env:RELEASE_VERSION" $installer "$installer.sha256" --target $env:GITHUB_SHA --title "Nocturne $env:RELEASE_VERSION — Windows x64" --notes 'Установщик Nocturne для Windows x64. Профили сохраняются при обновлении. Установщик пока без подписи издателя. SHA-256 опубликован рядом с файлом.' --repo $env:GITHUB_REPOSITORY
+          $notesPath = "docs/releases/$env:RELEASE_VERSION.md"
+          $noteArgs = if (Test-Path $notesPath) { @('--notes-file', $notesPath) } else { @('--notes', 'Установщик Nocturne для Windows x64. Профили сохраняются при обновлении. Установщик пока без подписи издателя. SHA-256 опубликован рядом с файлом.') }
+          gh release create "v$env:RELEASE_VERSION" $installer "$installer.sha256" --target $env:GITHUB_SHA --title "Nocturne $env:RELEASE_VERSION — Windows x64" @noteArgs --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

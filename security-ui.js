@@ -8,6 +8,7 @@ async function openSecurity(){if($('settings').hidden)await panel('settings');se
 $('security-button').onclick=openSecurity;$('warning-settings').onclick=openSecurity;$('warning-home').onclick=()=>go('nocturne://home');
 $('warning-https').onclick=()=>action('security-try-https');$('warning-http').onclick=()=>action('security-allow-http');
 function renderSecurityStatus(status){
+ if(status?.contentFilters){const ads=status.contentFilters.ads,sb=status.contentFilters.sponsors;$('adblock-status').textContent=(ads.enabled?(ads.ready?'Работает':'Правила недоступны'):'Отключён')+' · заблокировано: '+ads.blocked+(ads.updated?' · правила: '+new Date(ads.updated).toLocaleDateString('ru'):'')+(ads.error?' · '+ads.error:'');$('sponsorblock-status').textContent=(sb.enabled?'Включён':'Отключён')+' · пропущено интеграций: '+sb.skipped+(sb.error?' · API недоступен: '+sb.error:'');}
  if(!status)return;$('security-count').hidden=!status.blocked;$('security-count').textContent=status.blocked;$('security-blocked-count').textContent='За этот запуск: '+status.blocked;
  $('security-lists-status').textContent=Object.values(status.lists||{}).map(list=>`${list.name}: ${list.count.toLocaleString('ru')} доменов · ${list.updated?new Date(list.updated).toLocaleString('ru'):'список недоступен'}`).join('\n');
  $('security-update-error').textContent=status.updateError||'';$('update-security-lists').disabled=status.updating;
@@ -19,6 +20,8 @@ function renderSecurityStatus(status){
  $('tracking-exceptions').replaceChildren();for(const host of status.exceptions||[]){const row=document.createElement('div');row.className='exception-row';row.append(text('span',host),button('×','Удалить исключение',async()=>{await action('security-exception',{host,remove:true});loadSecurityState();}));$('tracking-exceptions').append(row);}
 }
 async function loadSecurityState(){const result=await action('security-status');if(result&&!result.error)renderSecurityStatus(result);}
+$('update-adblock').onclick=async()=>{$('update-adblock').disabled=true;try{await action('adblock-update');await loadSecurityState();}finally{$('update-adblock').disabled=false;}};
+for(const input of document.querySelectorAll('[data-browser-setting="adBlock"],[data-browser-setting="sponsorBlock"]')){const previous=input.onchange;input.onchange=async()=>{await previous();await loadSecurityState();};}
 api?.onSecurityStatus(renderSecurityStatus);
 $('update-security-lists').onclick=async()=>{$('update-security-lists').disabled=true;await action('security-update-lists');await loadSecurityState();};
 $('save-security-key').onclick=async()=>{const key=$('security-api-key').value.trim();if(!key)return toast('Введи API-ключ');const result=await action('security-save-key',key);if(!result?.error){$('security-api-key').value='';toast('Ключ сохранён зашифрованным');loadSecurityState();}};

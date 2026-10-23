@@ -5,7 +5,7 @@ const defaults={
   searchEngine:'google',firstRunComplete:false,searchSuggestions:true,restoreSession:false,
   backgroundTabs:false,closeToLeft:false,zoom:100,spellcheck:true,keepHistory:true,doNotTrack:false,
   askDownload:true,downloadDirectory:'',media:'block',notifications:'block',geolocation:'block',
-  threatProtection:true,trackerProtection:true,httpsOnly:true,scanDownloads:true,cloudProtection:false,
+  threatProtection:true,trackerProtection:true,adBlock:true,sponsorBlock:true,httpsOnly:true,scanDownloads:true,cloudProtection:false,
   cloudProvider:'safebrowsing',trackingExceptions:[],memorySaver:true,discardTimeoutMinutes:30,discardExceptions:[]
 };
 class Profile{

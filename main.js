@@ -14,6 +14,8 @@ const {AppUpdates}=require('./app-updates');
 const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
 const {ExtensionsManager}=require('./extensions');
+const {AdBlock}=require('./adblock');
+const {SponsorBlock,videoID}=require('./sponsorblock');
 const {watchEdits,hasDiscardRisk,within}=require('./tab-safety');
 const searchSuggestions=new SearchSuggestions((...args)=>net.fetch(...args));
 const path = require('node:path');
@@ -29,6 +31,8 @@ let vault, downloads, profile, icons, security, combinedSearch;
 let automaticImport;
 let appUpdates;
 let extensionsManager;
+let adBlock,sponsorBlock;
+function refreshContentFilters(){for(const t of tabs.values())if(t.view&&!t.view.webContents.isDestroyed())t.view.webContents.send('content-filter-settings');}
 app.enableSandbox();
 app.commandLine.appendSwitch('site-per-process');
 if(app.isPackaged){
@@ -233,6 +237,7 @@ function attachTabWebContents(t, url) {
       webviewTag: false,
       safeDialogs: true,
       devTools: true,
+      preload: path.join(__dirname,'site-preload.js'),
       partition: 'persist:nocturne'
     }
   });
@@ -509,6 +514,9 @@ app.whenReady().then(async()=>{
   if(profileMode==='personal'&&!require('node:fs').existsSync(path.join(profileDirectory,'browser-settings.json')))profile.update({firstRunComplete:true,searchSuggestions:false,cloudProtection:false,doNotTrack:true,restoreSession:false});
   security=new BrowserSecurity({directory:path.join(app.getPath('userData'),'security'),getPreferences:()=>profile.preferences,fetch:(...args)=>net.fetch(...args),crypto:safeStorage,notify:status=>{if(win&&!win.isDestroyed())win.webContents.send('security-status',status);}});
   await security.initialize();
+  adBlock=new AdBlock({directory:path.join(app.getPath('userData'),'adblock'),getPreferences:()=>profile.preferences,fetch:(...args)=>net.fetch(...args)});
+  await adBlock.initialize();
+  sponsorBlock=new SponsorBlock({getPreferences:()=>profile.preferences,fetch:(...args)=>net.fetch(...args)});
   icons=setupFavicons({directory:app.getPath('userData'),fetch:(...args)=>security.secureFetch(...args)});
   vault=new Vault(app.getPath('userData'),safeStorage);
   automaticImport=new AutomaticImport({vault,notify:result=>{if(win&&!win.isDestroyed())win.webContents.send('password-import-progress',result);}});
@@ -517,6 +525,18 @@ app.whenReady().then(async()=>{
     const error=await shell.openPath(file);if(error)throw new Error('Не удалось открыть установщик.');app.quit();return {started:true};
   }});
   const sites=session.fromPartition('persist:nocturne');
+  const trustedContent=event=>event.sender.session===sites&&[...tabs.values()].some(t=>t.view?.webContents===event.sender);
+  ipcMain.handle('content-cosmetics',(event,tokens)=>{
+    if(!trustedContent(event)||!/^https?:\/\//i.test(event.senderFrame?.url||'')||!adBlock.enabled(event.sender.getURL()))return '';
+    const clean=value=>Array.isArray(value)?value.slice(0,2000).filter(t=>typeof t==='string'&&t.length<=128):[];
+    return adBlock.cosmetics(event.senderFrame.url,{classes:clean(tokens?.classes),ids:clean(tokens?.ids)});
+  });
+  ipcMain.handle('content-sponsor',async event=>{
+    if(!trustedContent(event)||event.senderFrame!==event.sender.mainFrame||!videoID(event.senderFrame.url))return {enabled:false,segments:[]};
+    const url=event.senderFrame.url;const segments=await sponsorBlock.segments(url);
+    return {enabled:profile.preferences.sponsorBlock,segments};
+  });
+  ipcMain.on('content-sponsor-skipped',event=>{if(trustedContent(event)&&event.senderFrame===event.sender.mainFrame&&videoID(event.senderFrame.url)&&profile.preferences.sponsorBlock)sponsorBlock.skipped++;});
   sites.spellCheckerEnabled=profile.preferences.spellcheck;
   extensionsManager=new ExtensionsManager({directory:path.join(app.getPath('userData'),'extensions'),session:sites,fetch:(...args)=>net.fetch(...args)});
   await extensionsManager.initialize();
@@ -529,7 +549,7 @@ app.whenReady().then(async()=>{
     const main=details.resourceType==='mainFrame';
     if(main&&t&&details.method!=='GET')t.hasPostHistory=true;
     security.check(details.url,{main,topURL:t?.url||'',cloud:main}).then(verdict=>{
-      if(verdict){security.record(details.url,verdict.kind);if(main&&t){t.security={...verdict,url:details.url};t.url=details.url;t.loading=false;t.error=null;layout();state();}callback({cancel:true});}else callback({});
+      if(verdict){security.record(details.url,verdict.kind);if(main&&t){t.security={...verdict,url:details.url};t.url=details.url;t.loading=false;t.error=null;layout();state();}callback({cancel:true});}else if(adBlock.match(details,t?.url||details.referrer||'')){callback({cancel:true});}else callback({});
     }).catch(()=>{if(main&&t){t.security={kind:'check-error',message:'Не удалось завершить проверку адреса.',url:details.url};t.loading=false;layout();state();}callback({cancel:true});});
   });
   const grants=new Set();
@@ -629,7 +649,8 @@ app.whenReady().then(async()=>{
       const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
       await new Promise((resolve,reject)=>{const child=require('node:child_process').spawn(process.execPath,args,{env,detached:true,stdio:'ignore',windowsHide:true});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});return {opened:true};
     }
-    if(action==='security-status')return {...security.status(),defender:downloads.scannerStatus(),runtime:{version:process.versions.electron,packaged:app.isPackaged,autoUpdates:false}};
+    if(action==='security-status')return {...security.status(),contentFilters:{ads:adBlock.status(),sponsors:sponsorBlock.status()},defender:downloads.scannerStatus(),runtime:{version:process.versions.electron,packaged:app.isPackaged,autoUpdates:false}};
+    if(action==='adblock-update'){const result=await adBlock.update();refreshContentFilters();return result;}
     if(action==='security-update-lists')return security.update();
     if(action==='security-save-key'){await security.setKey(value);return {saved:true};}
     if(action==='security-test-connection'){
@@ -641,7 +662,7 @@ app.whenReady().then(async()=>{
       const links={console:'https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com',guide:'https://developers.google.com/safe-browsing/v4/get-started'};
       if(!links[value])throw new Error('Неизвестная ссылка.');await shell.openExternal(links[value]);return {opened:true};
     }
-    if(action==='security-exception'){const exceptions=security.exception(value?.host,!!value?.remove);profile.preferences.trackingExceptions=exceptions;profile.write('browser-settings.json',profile.preferences);return exceptions;}
+    if(action==='security-exception'){const exceptions=security.exception(value?.host,!!value?.remove);profile.preferences.trackingExceptions=exceptions;profile.write('browser-settings.json',profile.preferences);refreshContentFilters();return exceptions;}
     if(action==='security-allow-http'){
       const t=current();if(t?.security?.kind!=='http')throw new Error('Нет HTTP-перехода для подтверждения.');const url=t.security.url;security.allowHTTP(url);return navigate(url);
     }
@@ -655,7 +676,7 @@ app.whenReady().then(async()=>{
     }
     if(action==='favicon-get')return {icon:await icons.get(value)};
     if(action==='settings-get')return {...profile.preferences,downloadDirectory:profile.preferences.downloadDirectory||app.getPath('downloads'),versions:{app:app.getVersion(),chromium:process.versions.chrome,electron:process.versions.electron}};
-    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())t.view?.webContents.setZoomFactor(updated.zoom/100);return updated;}
+    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())t.view?.webContents.setZoomFactor(updated.zoom/100);if(['adBlock','sponsorBlock'].some(key=>Object.hasOwn(value||{},key)))refreshContentFilters();return updated;}
     if(action==='choose-download-directory'){const chosen=await dialog.showOpenDialog(win,{title:'Папка для загрузок',defaultPath:profile.preferences.downloadDirectory||app.getPath('downloads'),properties:['openDirectory','createDirectory']});if(chosen.canceled)return {canceled:true};profile.preferences.downloadDirectory=chosen.filePaths[0];profile.write('browser-settings.json',profile.preferences);return {directory:chosen.filePaths[0]};}
     if(action==='history-list')return profile.history;
     if(action==='history-delete'){

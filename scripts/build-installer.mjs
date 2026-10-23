@@ -9,7 +9,8 @@ await stat(path.join(directory,'Nocturne.exe'));
 const compiler=process.env.INNO_COMPILER||path.resolve('.tools','inno-portable','tools','ISCC.exe');
 await stat(compiler);
 // Only the pre-existing, hardened app is packaged. No profile/export data is included.
-const output=path.resolve('release');
+const preview=process.argv.includes('--preview');
+const output=preview?path.resolve('artifacts','installer-preview'):path.resolve('release');
 const {stdout}=await execute(compiler,['/Qp',path.resolve('scripts','installer.iss')],{windowsHide:true,maxBuffer:2*1024*1024,env:{...process.env,NOCTURNE_APP_VERSION:pkg.version,NOCTURNE_BUILD_DIRECTORY:directory,NOCTURNE_INSTALLER_OUTPUT:output}});
 process.stdout.write(stdout);
 const installer=path.join(output,`Nocturne-Setup-${pkg.version}-x64.exe`),bytes=await readFile(installer),hash=createHash('sha256').update(bytes).digest('hex');
