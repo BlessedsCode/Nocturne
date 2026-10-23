@@ -27,16 +27,17 @@ class Profile{
   if(![5,15,30,60,120].includes(this.preferences.discardTimeoutMinutes))this.preferences.discardTimeoutMinutes=30;
   const history=this.read('history.json',[]),session=this.read('tabs.json',[]);
   this.history=Array.isArray(history)?history.filter(item=>item&&typeof item.url==='string'&&/^https?:\/\//i.test(item.url)).slice(0,1000).map(item=>({...item,id:randomUUID(),title:typeof item.title==='string'?item.title:item.url})):[];
-  this.lastSession=Array.isArray(session)?session.filter(url=>typeof url==='string'&&/^https?:\/\//i.test(url)).slice(0,40):[];
+  this.sessionState=require('./session-state').decodeSession(session);
+  this.lastSession=this.sessionState.tabs.map(t=>t.url).filter(Boolean);
   const dismissed=this.read('dismissed-suggestions.json',[]);this.dismissedSuggestions=new Set(Array.isArray(dismissed)?dismissed.filter(value=>typeof value==='string').slice(-1000):[]);
  }
  read(name,fallback){try{return JSON.parse(fs.readFileSync(path.join(this.directory,name),'utf8'));}catch{return fallback;}}
  write(name,value){fs.mkdirSync(this.directory,{recursive:true});const file=path.join(this.directory,name);fs.writeFileSync(file+'.tmp',JSON.stringify(value));fs.renameSync(file+'.tmp',file);}
  flush(){
   if(this._historyDirty){
-   this._historyDirty=false;
    if(this._historyTimer){clearTimeout(this._historyTimer);this._historyTimer=null;}
    this.write('history.json',this.history);
+   this._historyDirty=false;
   }
  }
  update(changes){
@@ -63,10 +64,8 @@ class Profile{
   else this.history.unshift({id:randomUUID(),url,title,time:Date.now(),visits:1});
   this.history=this.history.slice(0,1000);
   this._historyDirty=true;
-  if(process.env.NODE_TEST_CONTEXT){
-   this.flush();
-  } else if(!this._historyTimer){
-   this._historyTimer=setTimeout(()=>this.flush(),2500);
+  if(!this._historyTimer){
+   this._historyTimer=setTimeout(()=>{this._historyTimer=null;try{this.flush();}catch{/* Keep dirty data for the next visit or explicit flush. */}},2500);
    this._historyTimer.unref?.();
   }
  }

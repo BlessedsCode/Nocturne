@@ -6,6 +6,12 @@ const path = require('node:path');
 const { Profile } = require('./profile');
 const { setupFavicons } = require('./favicons');
 
+test('favicon discovery reads bounded HTML head but rejects truncated oversized images',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nocturne-icon-limits-'));const requested=[];
+ const icons=setupFavicons({directory:dir,fetch:async url=>{requested.push(url);if(url.endsWith('/large.svg'))return new Response('x'.repeat(70000),{headers:{'content-type':'image/svg+xml'}});if(url.endsWith('/favicon.ico'))return new Response('valid-fallback',{headers:{'content-type':'image/x-icon'}});return new Response('<link rel="icon" href="/large.svg">'+' '.repeat(150000));}});
+ try{const icon=await icons.get('https://icon.example/');assert(requested.includes('https://icon.example/large.svg'));assert.equal(Buffer.from(icon.split(',')[1],'base64').toString(),'valid-fallback');}finally{icons.flush();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 test('profile memory saver preferences: defaults, validation, and exceptions', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nocturne-ms-'));
   try {

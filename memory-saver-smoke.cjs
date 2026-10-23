@@ -1,0 +1,38 @@
+const {_electron:electron}=require('playwright-core'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),http=require('node:http');
+(async()=>{
+ const hits=new Map(),server=http.createServer((req,res)=>{const mode=req.url.split('?')[0];hits.set(mode,(hits.get(mode)||0)+1);if(mode==='/logo.svg'){res.writeHead(200,{'Content-Type':'image/svg+xml'});res.end('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="red" d="M0 0h16v16H0z"/></svg>');return;}if(mode==='/favicon.ico'){res.writeHead(404);res.end();return;}
+ const bodies={'/empty':'<input id="field" value="original">','/check':'<input id="field" type="checkbox" checked>','/editor':'<div contenteditable>Draft</div>','/frame':'<iframe src="/child"></iframe>','/child':'<textarea>Embedded draft</textarea>','/react':'<input id="field">'};
+ res.writeHead(200,{'Content-Type':'text/html'});res.end('<!doctype html><title>Fixture '+mode+'</title><link rel="icon" href="/logo.svg"><style>body{height:5000px}</style>'+(bodies[mode]||'<h1>Read only</h1>'));});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
+ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;let app;
+ try{
+ app=await require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+path.resolve('artifacts','memory-review-'+Date.now())],env});const page=await app.firstWindow(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.waitForSelector('.tab');
+ await page.evaluate(base=>{const box=document.createElement('div');box.id='favicon-review';box.append(favicon('',base,'one'),favicon('',base,'two'));document.body.append(box);},base);
+ await page.waitForFunction(()=>[...document.querySelectorAll('#favicon-review img')].length===2&&[...document.querySelectorAll('#favicon-review img')].every(img=>img.src.startsWith('data:image/')));
+ async function load(mode){await page.evaluate(url=>window.browser.command('navigate',url),base+mode);await page.waitForFunction(url=>state.tabs.some(t=>t.id===state.active&&t.url===url&&!t.loading),base+mode);return page.evaluate(()=>state.active);}
+ async function wcId(){return app.evaluate(({webContents},base)=>webContents.getAllWebContents().find(w=>w.getURL().startsWith(base)&&w.getType()!=='devtools').id,base);}
+ async function script(code){return app.evaluate(({webContents},{id,code})=>webContents.fromId(id).executeJavaScript(code),{id:await wcId(),code});}
+ for(const [mode,change] of [['/empty','document.querySelector("#field").value=""'],['/check','document.querySelector("#field").checked=false'],['/editor','true'],['/frame','true'],['/react','const el=document.querySelector("#field");el.value="React draft";el.defaultValue=el.value;el.dispatchEvent(new Event("input",{bubbles:true}));']]){
+  const id=await load(mode);await script(change);await page.evaluate(()=>window.browser.command('new'));await page.waitForFunction(id=>state.active!==id,id);assert.equal(await page.evaluate(id=>window.browser.command('tab-discard',id),id),false,'must retain '+mode);await page.evaluate(id=>window.browser.command('close-tab',id),await page.evaluate(()=>state.active));
+ }
+ const id=await load('/clean'),old=await wcId();await script('scrollTo(0,700)');await page.evaluate(()=>window.browser.command('new'));await page.waitForFunction(id=>state.active!==id,id);
+ assert.equal(await page.evaluate(id=>window.browser.command('tab-discard',id),id),true);await page.waitForFunction(id=>state.tabs.find(t=>t.id===id)?.sleeping,id);assert.equal(await app.evaluate(({webContents},id)=>!!webContents.fromId(id),old),false);
+ await page.evaluate(id=>window.browser.command('switch',id),id);await page.waitForFunction(()=>!state.tabs.find(t=>t.id===state.active).loading);assert.equal(await script('scrollY'),700);await load('/other');assert.equal(await script('scrollY'),0);
+ // Pause the safety check, then select the tab before it completes.
+ const raceId=await page.evaluate(()=>state.active),raceWC=await wcId();await page.evaluate(()=>window.browser.command('new'));await page.waitForFunction(id=>state.active!==id,raceId);
+ await app.evaluate(({webContents},id)=>{const wc=webContents.fromId(id),run=wc.executeJavaScriptInIsolatedWorld.bind(wc);wc.executeJavaScriptInIsolatedWorld=async(...args)=>{if(args[1]?.[0]?.code.includes('function hasDiscardRisk')){global.__discardChecking=true;await new Promise(r=>setTimeout(r,200));}return run(...args);};},raceWC);
+ await page.evaluate(id=>{window.__pendingDiscard=window.browser.command('tab-discard',id);},raceId);
+ for(let i=0;i<20&&!await app.evaluate(()=>!!global.__discardChecking);i++)await page.waitForTimeout(20);
+ await page.evaluate(id=>window.browser.command('switch',id),raceId);assert.equal(await page.evaluate(()=>window.__pendingDiscard),false);assert.equal(await app.evaluate(({webContents},id)=>!!webContents.fromId(id),raceWC),true);
+ await app.evaluate(({Menu})=>{Menu.buildFromTemplate=template=>{global.__tabMenu=template;return {popup(){}};};});await page.locator('.tab.active').click({button:'right'});assert(await app.evaluate(()=>global.__tabMenu?.some(x=>x.label==='Дублировать')));
+ assert.deepEqual(errors,[]);await app.close();app=null;
+ const profile=path.resolve('artifacts','lazy-review-'+Date.now());await fs.mkdir(profile,{recursive:true});await fs.writeFile(path.join(profile,'browser-settings.json'),JSON.stringify({firstRunComplete:true,restoreSession:true,memorySaver:true}));await fs.writeFile(path.join(profile,'tabs.json'),JSON.stringify([base+'/lazy-first',base+'/lazy-second',base+'/lazy-third']));
+ app=await electron.launch({args:[path.resolve('.'),'--user-data-dir='+profile],env});const lazy=await app.firstWindow();await lazy.waitForSelector('.tab');await lazy.waitForFunction(()=>state.tabs.length===3&&!state.tabs[0].loading);assert.equal(hits.get('/lazy-second')||0,0);assert.equal(hits.get('/lazy-third')||0,0);await lazy.locator('.tab').nth(2).click();await lazy.waitForFunction(()=>state.tabs[2].loading===false&&!state.tabs[2].sleeping);assert.equal(hits.get('/lazy-third'),1);
+ const firstLazy=await lazy.evaluate(()=>state.tabs[0].id);
+ await lazy.evaluate(url=>window.browser.command('open-tab',url),base+'/empty');await lazy.waitForFunction(()=>state.tabs.find(t=>t.id===state.active)?.loading===false);const dirty=await lazy.evaluate(()=>state.active);
+ await app.evaluate(async({webContents},url)=>{const wc=webContents.getAllWebContents().find(w=>w.getURL()===url);await wc.executeJavaScript('document.querySelector("#field").value=""');},base+'/empty');
+ await lazy.evaluate(url=>window.browser.command('open-tab',url),base+'/active');await lazy.waitForFunction(()=>!state.tabs.find(t=>t.id===state.active).loading);const active=await lazy.evaluate(()=>state.active);
+ await lazy.evaluate(()=>window.browser.command('settings-update',{discardTimeoutMinutes:5}));await app.evaluate(()=>{const now=Date.now;Date.now=()=>now()+6*60*1000;});
+ await lazy.waitForFunction(id=>state.tabs.find(t=>t.id===id)?.sleeping,firstLazy,{timeout:35000});assert.equal(await lazy.evaluate(id=>state.tabs.find(t=>t.id===id).sleeping,dirty),false);assert.equal(await lazy.evaluate(id=>state.active===id&&!state.tabs.find(t=>t.id===id).sleeping,active),true);
+ console.log('PASS: shared favicon consumers; erased text, checkbox, editor, iframe and React-like drafts protected; real discard/wake and one-time scroll; async selection race; native tab menu; lazy restore requests only selected pages; real automatic timer discards idle clean pages and retains dirty/active pages.');
+ }finally{if(app)await app.close();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

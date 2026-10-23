@@ -14,6 +14,7 @@ const {AppUpdates}=require('./app-updates');
 const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
 const {ExtensionsManager}=require('./extensions');
+const {watchEdits,hasDiscardRisk,within}=require('./tab-safety');
 const searchSuggestions=new SearchSuggestions((...args)=>net.fetch(...args));
 const path = require('node:path');
 const {pathToFileURL}=require('node:url');
@@ -22,7 +23,7 @@ const {shortcutFor,contextTemplate}=require('./browser-controls');
 const {safeFilename}=require('./download-names');
 const shellURL=pathToFileURL(path.join(__dirname,'index.html')).href;
 let win, active, overlay = false, nextId = 0, shuttingDown = false;
-let profileRevealTimer, memorySaverTimer;
+let profileRevealTimer, memorySaverTimer, memorySaverRunning=false;
 let profileIntroduction=false;
 let vault, downloads, profile, icons, security, combinedSearch;
 let automaticImport;
@@ -151,7 +152,7 @@ async function runBrowserAction(action){
  const wc=pageContents();
  if(action==='address'){win.webContents.focus();win.webContents.send('focus-address');return;}
  if(action==='new-tab'){overlay=false;tell('close-panels');newTab();return;}
- if(action==='close-tab'){overlay=false;tell('close-panels');closeTab(active);return;}
+ if(action==='close-tab'){overlay=false;tell('close-panels');return await closeTab(active);}
  if(action==='reopen-tab'){if(closedTabs.length&&tabs.size<40){overlay=false;tell('close-panels');newTab(closedTabs.pop());}return;}
  if(['next-tab','previous-tab'].includes(action)||/^tab-[1-9]$/.test(action)){
   const ids=[...tabs.keys()],index=ids.indexOf(active);closePageFind(false);overlay=false;tell('close-panels');
@@ -237,6 +238,7 @@ function attachTabWebContents(t, url) {
   });
   win.contentView.addChildView(t.view);
   const wc = t.view.webContents;
+  wc.on('dom-ready',()=>wc.executeJavaScriptInIsolatedWorld(998,[{code:'('+watchEdits.toString()+')()'}]).catch(()=>{}));
   wc.setZoomFactor(profile.preferences.zoom / 100);
   let popupTimes = [];
   wc.setWindowOpenHandler(({url, disposition}) => {
@@ -268,6 +270,8 @@ function attachTabWebContents(t, url) {
   });
   wc.on('did-start-navigation', (_event, _url, inPlace, main) => {
     if (main && !inPlace) {
+      t.navigationEpoch=(t.navigationEpoch||0)+1;
+      t.mediaProtected=false;
       t.error = null;
       t.security = null;
       layout();
@@ -280,6 +284,7 @@ function attachTabWebContents(t, url) {
     if (!t.security) profile.visit(t.url, t.title);
     if (t.scrollPosition) {
       const {x, y} = t.scrollPosition;
+      t.scrollPosition=null;
       wc.executeJavaScript(`window.scrollTo(${Number(x)||0}, ${Number(y)||0})`).catch(() => {});
     }
     state();
@@ -328,7 +333,7 @@ function attachTabWebContents(t, url) {
 async function canDiscardTab(t) {
   if (!t || t.id === active) return false;
   if (!t.view || !t.url || !/^https?:\/\//i.test(t.url)) return false;
-  if (t.sleeping || t.loading || t.htmlFullScreen || t.neverDiscard) return false;
+  if (t.sleeping || t.loading || t.htmlFullScreen || t.neverDiscard || t.closing || t.hasPostHistory) return false;
   try {
     const host = new URL(t.url).hostname.toLowerCase();
     const exceptions = Array.isArray(profile?.preferences?.discardExceptions) ? profile.preferences.discardExceptions : [];
@@ -340,22 +345,12 @@ async function canDiscardTab(t) {
   if (!wc || wc.isDestroyed()) return false;
   if (wc.isCurrentlyAudible()) return false;
   if (wc.isDevToolsOpened()) return false;
+  if(t.mediaProtected||downloads?.snapshot().some(d=>d.active))return false;
   try {
-    const hasUnsavedOrMedia = await wc.executeJavaScriptInIsolatedWorld(998, [{
-      code: `(()=>{
-        try {
-          const media = document.querySelectorAll('video, audio');
-          for (const m of media) {
-            if (!m.paused && !m.ended && m.readyState > 2) return true;
-          }
-          const els = document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=checkbox]):not([type=radio]), textarea');
-          for(const el of els) {
-            if(el.value && el.value !== el.defaultValue) return true;
-          }
-          return false;
-        } catch(e) { return true; }
-      })()`
-    }]);
+    if(await within(wc.executeJavaScript('typeof window.onbeforeunload === "function"')))return false;
+    const hasUnsavedOrMedia = await within(wc.executeJavaScriptInIsolatedWorld(998, [{
+      code: '('+hasDiscardRisk.toString()+')()'
+    }]));
     if (hasUnsavedOrMedia) return false;
   } catch {
     return false;
@@ -363,17 +358,30 @@ async function canDiscardTab(t) {
   return true;
 }
 async function discardTab(t) {
-  if (!(await canDiscardTab(t))) return false;
+  if(!t||t.discarding)return false;
   const view = t.view;
   if (!view) return false;
+  const url=t.url,epoch=t.navigationEpoch,lastActiveAt=t.lastActiveAt;
+  t.discarding=true;
+  try{
+  if (!(await canDiscardTab(t))) return false;
   try {
-    const scroll = await view.webContents.executeJavaScript('({x: window.scrollX, y: window.scrollY})');
+    const scroll = await within(view.webContents.executeJavaScriptInIsolatedWorld(998,[{code:'({x: window.scrollX, y: window.scrollY})'}]));
     if (scroll && typeof scroll.x === 'number') t.scrollPosition = scroll;
-  } catch {}
+  } catch {return false;}
   try {
     const title = view.webContents.getTitle();
     if (title) t.title = title;
   } catch {}
+  // Switching, navigating or closing while the renderer is being checked cancels discard.
+  if(tabs.get(t.id)!==t||t.view!==view||t.id===active||t.loading||t.neverDiscard||t.url!==url||t.navigationEpoch!==epoch||t.lastActiveAt!==lastActiveAt)return false;
+  if(!(await canDiscardTab(t)))return false;
+  if(tabs.get(t.id)!==t||t.view!==view||t.id===active||t.loading||t.url!==url||t.navigationEpoch!==epoch||t.lastActiveAt!==lastActiveAt)return false;
+  const history=view.webContents.navigationHistory;
+  const entries=history.getAllEntries().map(entry=>({url:entry.url,title:entry.title.slice(0,240)}));
+  if(!entries.length||entries.some(entry=>{try{const u=new URL(entry.url);return !['http:','https:'].includes(u.protocol)||!!u.username||!!u.password;}catch{return true;}}))return false;
+  // Never copy Chromium pageState: it can include form values or POST state.
+  t.savedNavigation={entries,index:history.getActiveIndex()};
   t.sleeping = true;
   t.view = null;
   t.loading = false;
@@ -385,6 +393,7 @@ async function discardTab(t) {
   layout();
   state();
   return true;
+  }finally{t.discarding=false;}
 }
 function wakeTab(t) {
   if (!t || !t.url || (!t.sleeping && t.view)) return;
@@ -392,7 +401,9 @@ function wakeTab(t) {
   t.restoring = true;
   t.loading = true;
   const wc = attachTabWebContents(t, t.url);
-  wc.loadURL(t.url).catch(() => {});
+  const saved=t.savedNavigation,restoringURL=t.url;t.savedNavigation=null;
+  if(saved)wc.navigationHistory.restore(saved).catch(()=>{if(!wc.isDestroyed()&&t.view?.webContents===wc&&t.restoring&&t.url===restoringURL&&!t.security){t.loading=false;t.restoring=false;t.error='Не удалось восстановить страницу. Обнови вкладку.';layout();state();}});
+  else wc.loadURL(t.url).catch(() => {});
   layout();
   state();
 }
@@ -400,7 +411,7 @@ function newTab(url, options = {}) {
   closePageFind(false);
   if(tabs.size>=40)return {error:'Открыто слишком много вкладок. Закрой ненужные.'};
   const previous=active;
-  const inBackground=!!(options.background||(url&&profile?.preferences.backgroundTabs));
+  const inBackground=options.background??!!(url&&profile?.preferences.backgroundTabs);
   const t = {
     id:++nextId,
     title:'Новая вкладка',
@@ -418,7 +429,9 @@ function newTab(url, options = {}) {
     htmlFullScreen:false
   };
   tabs.set(t.id,t); active=t.id;
-  if(url) navigate(url); else {layout();state();}
+  if(url&&options.lazy){t.url=url;t.title=options.metadata?.title||new URL(url).hostname;t.favicon=options.metadata?.favicon||'';t.neverDiscard=!!options.metadata?.neverDiscard;t.sleeping=true;layout();state();}
+  else if(url){navigate(url);t.neverDiscard=!!options.metadata?.neverDiscard;}
+  else {layout();state();}
   if(inBackground&&previous){active=previous;const p=tabs.get(previous);if(p)p.lastActiveAt=Date.now();layout();state();}
   if(!inBackground){focusActiveTab();if(!url)win.webContents.send('focus-address');}
 }
@@ -426,14 +439,14 @@ function navigate(input) {
   let url;
   try {url=resolveAddress(input);} catch(e) {return {error:e.message};}
   const t=current(); if(!t)return;
-  t.error=null;t.security=null;t.lastActiveAt=Date.now();
+  t.error=null;t.security=null;t.lastActiveAt=Date.now();t.scrollPosition=null;
   if(t.htmlFullScreen){
     t.htmlFullScreen=false;
     if(win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
   }
   if(!url) {
     closePageFind(false);
-    const view=t.view;t.view=null;t.sleeping=false;t.url='';t.title='Новая вкладка';t.loading=false;t.favicon='';
+    const view=t.view;t.view=null;t.sleeping=false;t.savedNavigation=null;t.hasPostHistory=false;t.url='';t.title='Новая вкладка';t.loading=false;t.favicon='';
     if(view){try{win.contentView.removeChildView(view);view.webContents.close();}catch{}}
     layout();state();return;
   }
@@ -444,7 +457,7 @@ function navigate(input) {
   t.url=url;t.title=new URL(url).hostname;t.loading=true;
   wc.loadURL(url).catch(()=>{});layout();state();
 }
-function closeTab(id){
+function finishCloseTab(id){
   const t=tabs.get(id);if(!t)return;
   if(t.htmlFullScreen&&win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
   closePageFind(false);
@@ -453,6 +466,7 @@ function closeTab(id){
   const ids=[...tabs.keys()],index=ids.indexOf(id),view=t.view;
   t.view=null;t.sleeping=false;
   tabs.delete(id);
+  if(shuttingDown||!win||win.isDestroyed())return;
   if(active===id){
     active=profile.preferences.closeToLeft?(ids[index-1]||ids[index+1]):(ids[index+1]||ids[index-1]);
     const nextTab=tabs.get(active);
@@ -461,9 +475,31 @@ function closeTab(id){
       if(nextTab.sleeping||!nextTab.view)wakeTab(nextTab);
     }
   }
-  if(view){try{win.contentView.removeChildView(view);view.webContents.close();}catch{}}
+  if(view){try{win.contentView.removeChildView(view);}catch{}}
   if(!tabs.size)newTab();
   layout();state();focusActiveTab();
+}
+async function closeTab(id){
+ const t=tabs.get(id);if(!t)return false;if(t.closing)return t.closing;
+ const wc=t.view?.webContents;
+ if(!wc||wc.isDestroyed()){finishCloseTab(id);return true;}
+ const closing=new Promise((resolve,reject)=>{
+  let timer;
+  const cleanup=()=>{clearTimeout(timer);wc.removeListener('will-prevent-unload',prevent);wc.removeListener('destroyed',destroyed);t.closing=null;};
+  const destroyed=()=>{cleanup();finishCloseTab(id);resolve(true);};
+  const prevent=event=>{
+   let leave=false;try{leave=dialog.showMessageBoxSync(win,{type:'question',title:'Закрыть вкладку?',message:'Сайт просит подтвердить закрытие страницы.',detail:'Несохранённые изменения могут быть потеряны.',buttons:['Остаться','Закрыть вкладку'],defaultId:0,cancelId:0})===1;}catch{}
+   if(leave)event.preventDefault();else{cleanup();resolve(false);}
+  };
+  wc.once('destroyed',destroyed);wc.on('will-prevent-unload',prevent);
+  timer=setTimeout(()=>{
+   if(wc.isDestroyed())return;
+   let force=false;try{force=dialog.showMessageBoxSync(win,{type:'question',title:'Страница не отвечает',message:'Закрыть вкладку принудительно?',detail:'Несохранённые изменения могут быть потеряны.',buttons:['Подождать','Закрыть вкладку'],defaultId:0,cancelId:0})===1;}catch{}
+   if(force&&!wc.isDestroyed()){wc.removeListener('will-prevent-unload',prevent);try{wc.close({waitForBeforeUnload:false});}catch(error){cleanup();reject(error);}}
+  },10000);timer.unref?.();
+  try{wc.close({waitForBeforeUnload:true});}catch(error){cleanup();reject(error);}
+ });
+ t.closing=closing;return closing;
 }
 app.whenReady().then(async()=>{
   if(!ownsProfile)return;
@@ -491,6 +527,7 @@ app.whenReady().then(async()=>{
     if(requester?.getType()==='remote'&&/^devtools:\/\/(devtools|theme)\//.test(details.url)){callback({cancel:false});return;}
     const t=[...tabs.values()].find(tab=>tab.view?.webContents.id===details.webContentsId);
     const main=details.resourceType==='mainFrame';
+    if(main&&t&&details.method!=='GET')t.hasPostHistory=true;
     security.check(details.url,{main,topURL:t?.url||'',cloud:main}).then(verdict=>{
       if(verdict){security.record(details.url,verdict.kind);if(main&&t){t.security={...verdict,url:details.url};t.url=details.url;t.loading=false;t.error=null;layout();state();}callback({cancel:true});}else callback({});
     }).catch(()=>{if(main&&t){t.security={kind:'check-error',message:'Не удалось завершить проверку адреса.',url:details.url};t.loading=false;layout();state();}callback({cancel:true});});
@@ -499,6 +536,7 @@ app.whenReady().then(async()=>{
   const originOf=value=>{try{return new URL(value).origin;}catch{return '';}};
   sites.setPermissionRequestHandler(async(wc,permission,callback,details)=>{
     if(!wc||wc.isDestroyed()||!details){callback(false);return;}
+    if(permission==='media'){const tab=[...tabs.values()].find(t=>t.view?.webContents===wc);if(tab)tab.mediaProtected=true;}
     if(permission==='fullscreen'||permission==='pointerLock'||permission==='clipboard-sanitized-write'||permission==='clipboard-write'){callback(true);return;}
     const origin=originOf(details.requestingUrl||wc.getURL());const currentOrigin=originOf(wc.getURL());
     if(details.isMainFrame===false||!['media','notifications','geolocation'].includes(permission)||profile.preferences[permission]!=='ask'||!origin.startsWith('https://')||origin!==currentOrigin){callback(false);return;}
@@ -522,40 +560,10 @@ app.whenReady().then(async()=>{
     profileIntroduction=false;
     requestOverlay(false);
     if(tabs.size){layout();state();return;}
-    const restore=profile.preferences.restoreSession?profile.lastSession:[];
-    const validUrls=restore.filter(url=>/^https?:\/\//i.test(url));
-    if(validUrls.length>0){
-      newTab(validUrls[0]);
-      if(profile.preferences.memorySaver){
-        for(let i=1;i<validUrls.length;i++){
-          const url=validUrls[i];
-          let title='Новая вкладка';
-          try { title = new URL(url).hostname; } catch {}
-          const t = {
-            id: ++nextId,
-            title,
-            url,
-            favicon: '',
-            view: null,
-            error: null,
-            security: null,
-            loading: false,
-            sleeping: true,
-            restoring: false,
-            neverDiscard: false,
-            lastActiveAt: 0,
-            scrollPosition: null,
-            htmlFullScreen: false
-          };
-          tabs.set(t.id, t);
-        }
-        layout();
-        state();
-      } else {
-        for(let i=1;i<validUrls.length;i++){
-          newTab(validUrls[i], {background:true});
-        }
-      }
+    const restore=profile.preferences.restoreSession?profile.sessionState:{tabs:[],active:0};
+    for(let i=0;i<restore.tabs.length;i++){
+      const entry=restore.tabs[i];
+      newTab(entry.url,{background:i!==restore.active,lazy:profile.preferences.memorySaver&&i!==restore.active,metadata:entry});
     }
     if(!tabs.size)newTab();
   });
@@ -573,7 +581,7 @@ app.whenReady().then(async()=>{
     shuttingDown=true;
     combinedSearch?.cancel();
     for(const child of win.getChildWindows())child.destroy();
-    profile.write('tabs.json',[...tabs.values()].map(t=>t.url).filter(Boolean));
+    const savedTabs=[...tabs.values()];profile.write('tabs.json',{version:2,active:savedTabs.findIndex(t=>t.id===active),tabs:savedTabs.map(t=>({url:t.url,title:t.title,favicon:t.favicon||'',neverDiscard:!!t.neverDiscard}))});
     profile.flush();
     icons.flush?.();
   });
@@ -587,16 +595,20 @@ app.whenReady().then(async()=>{
   if(Object.values(security.lists).some(list=>Date.now()-list.updated>8*3600000))security.update().catch(()=>{});
   const securityTimer=setInterval(()=>security.update().catch(()=>{}),8*3600000);securityTimer.unref();
   memorySaverTimer=setInterval(async()=>{
-    if(shuttingDown||!win||win.isDestroyed())return;
+    if(memorySaverRunning||shuttingDown||!win||win.isDestroyed())return;
     if(!profile?.preferences?.memorySaver)return;
+    memorySaverRunning=true;
+    try{
     const timeoutMs=(profile.preferences.discardTimeoutMinutes||30)*60*1000;
     const now=Date.now();
-    for(const t of tabs.values()){
+    for(const t of [...tabs.values()]){
+      if(shuttingDown||!profile.preferences.memorySaver)break;
       if(t.id===active||t.sleeping||!t.view)continue;
       if(t.lastActiveAt&&(now-t.lastActiveAt>=timeoutMs)){
         await discardTab(t).catch(()=>{});
       }
     }
+    }finally{memorySaverRunning=false;}
   },25000);
   memorySaverTimer.unref?.();
   ipcMain.handle('command',async(event,action,value)=>{
@@ -723,8 +735,8 @@ app.whenReady().then(async()=>{
     if(action==='navigate')return navigate(value);
     if(action==='open-tab'&&typeof value==='string'&&/^https?:\/\//i.test(value))return newTab(value);
     if(action==='new')newTab();
-    if(action==='tab-context-menu'&&tabs.has(value)){
-      const t=tabs.get(value);
+    if(action==='tab-context-menu'){
+      const t=tabs.get(typeof value==='object'?value?.id:value);
       if(!t)return;
       const isSleeping=!!t.sleeping;
       const isNeverDiscard=!!t.neverDiscard;
@@ -788,14 +800,14 @@ app.whenReady().then(async()=>{
         {type:'separator'},
         {
           label:'Закрыть вкладку',
-          click:()=>closeTab(t.id)
+          click:()=>closeTab(t.id).catch(reportError)
         },
         {
           label:'Закрыть другие вкладки',
           enabled:tabs.size>1,
-          click:()=>{
+          click:async()=>{
             for(const other of [...tabs.values()]){
-              if(other.id!==t.id)closeTab(other.id);
+              if(other.id!==t.id&&!await closeTab(other.id))break;
             }
           }
         }
@@ -832,7 +844,7 @@ app.whenReady().then(async()=>{
       }
       layout();state();focusActiveTab();
     }
-    if(action==='close-tab')closeTab(value);
+    if(action==='close-tab')return await closeTab(value);
     if(action==='reorder-tabs'&&Array.isArray(value)){
       const reordered=new Map();
       for(const id of value){if(tabs.has(id))reordered.set(id,tabs.get(id));}

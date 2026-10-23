@@ -8,7 +8,9 @@ const faviconCache=stored('favicons',{});
 for(const [key,value] of Object.entries(faviconCache))if(typeof value!=='string')delete faviconCache[key];
 const MAX_FAVICONS=150;let saveIconTimer=null;
 function scheduleSaveIconCache(){if(!saveIconTimer){saveIconTimer=setTimeout(()=>{saveIconTimer=null;saveIconCache();},2000);}}
-function setFaviconCache(origin,icon){if(faviconCache[origin]===icon)return;faviconCache[origin]=icon;const keys=Object.keys(faviconCache);if(keys.length>MAX_FAVICONS){for(let i=0;i<keys.length-MAX_FAVICONS;i++)delete faviconCache[keys[i]];}scheduleSaveIconCache();}
+function trimFaviconCache(){const keys=Object.keys(faviconCache);let bytes=keys.reduce((n,k)=>n+faviconCache[k].length*2,0);while(keys.length>MAX_FAVICONS||bytes>2.5*1024*1024){const key=keys.shift();bytes-=faviconCache[key].length*2;delete faviconCache[key];}}
+trimFaviconCache();
+function setFaviconCache(origin,icon){if(faviconCache[origin]===icon)return;delete faviconCache[origin];faviconCache[origin]=icon;trimFaviconCache();scheduleSaveIconCache();}
 const iconRequests=new Map();
 function saveIconCache(){try{localStorage.setItem('favicons',JSON.stringify(Object.fromEntries(Object.entries(faviconCache).filter(([,value])=>!value.startsWith('data:')))));}catch{}}
 const defaults={opacity:42,blur:18,brightness:85,saturation:110,texture:true,preset:'dark'};
@@ -33,10 +35,12 @@ function favicon(source,url,title){
   if(!source&&fallback){const origin=new URL(url).origin;
     if(!iconRequests.has(origin)){
       const req=Promise.resolve(command('favicon-get',url)).then(result=>{
-        if(result?.icon){setFaviconCache(origin,result.icon);img.src=result.icon;if(!img.isConnected)wrap.append(img);}
+        if(result?.icon)setFaviconCache(origin,result.icon);
+        return result;
       }).catch(()=>{}).finally(()=>{iconRequests.delete(origin);});
       iconRequests.set(origin,req);
     }
+    iconRequests.get(origin).then(result=>{if(result?.icon){img.src=result.icon;if(!img.isConnected)wrap.append(img);}}).catch(()=>{});
   }return wrap;
 }
 const command=(action,value)=>api?.command(action,value);
@@ -199,7 +203,7 @@ function render(s){
   setButtonIcon($('bookmark'),saved.some(b=>b.url===t?.url)?'star-filled':'star');
   if(typeof renderSecurityWarning==='function')renderSecurityWarning(t);
   updateReloadAnimation(t?.loading);
-  let changed=false,iconsChanged=false;for(const tab of s.tabs){if(tab.url&&tab.favicon){try{const origin=new URL(tab.url).origin;if(faviconCache[origin]!==tab.favicon){faviconCache[origin]=tab.favicon;iconsChanged=true;}}catch{}}const bookmark=saved.find(b=>b.url===tab.url);if(bookmark&&tab.favicon&&bookmark.favicon!==tab.favicon){bookmark.favicon=tab.favicon;changed=true;}}
+  let changed=false,iconsChanged=false;for(const tab of s.tabs){if(tab.url&&tab.favicon){try{const origin=new URL(tab.url).origin;if(faviconCache[origin]!==tab.favicon){setFaviconCache(origin,tab.favicon);iconsChanged=true;}}catch{}}const bookmark=saved.find(b=>b.url===tab.url);if(bookmark){if(tab.favicon&&bookmark.favicon!==tab.favicon){bookmark.favicon=tab.favicon;changed=true;}if(!tab.loading&&tab.title&&bookmark.title!==tab.title){bookmark.title=tab.title;changed=true;}}}
   if(iconsChanged){saveIconCache();renderQuickLinks();}
   if(changed){localStorage.setItem('favorites',JSON.stringify(saved));if(!$('favorites').hidden)renderFavorites();}
 }
@@ -230,8 +234,8 @@ api?.onLinkAction(async({id,kind})=>{const link=links.find(l=>l.id===id);if(!lin
 function renderQuickLinks(){
   $('quick-links').replaceChildren();let rail=$('rail-links');if(!rail){rail=document.createElement('div');rail.id='rail-links';document.querySelectorAll('.rail>[data-url]').forEach(el=>el.remove());document.querySelector('.rail-line').after(rail);}rail.replaceChildren();
   for(const link of links){
-    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.url,()=>go(link.url),'quick-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
-    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.name,()=>go(link.url),'rail-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
+    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.url,()=>go(link.url),'quick-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
+    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.name,()=>go(link.url),'rail-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
   }
   $('quick-links').append(button('＋','Добавить или изменить быстрые ссылки',()=>panel('links-panel'),'add-quick-link'));
   rail.hidden=!preferences.showSidebarLinks;

@@ -134,7 +134,7 @@ class ExtensionsManager {
   constructor({directory, session, fetch}) {
     this.directory = directory;
     this.session = session;
-    this.fetch = fetch || net.fetch;
+    this.fetch = fetch || globalThis.fetch;
     this.configFile = path.join(this.directory, 'installed.json');
     this.installed = [];
   }
@@ -161,9 +161,9 @@ class ExtensionsManager {
 
   async _loadIntoSession(unpackedPath) {
     if (this.session.extensions?.loadExtension) {
-      return await this.session.extensions.loadExtension(unpackedPath, {allowFileAccess: true});
+      return await this.session.extensions.loadExtension(unpackedPath, {allowFileAccess: false});
     }
-    return await this.session.loadExtension(unpackedPath, {allowFileAccess: true});
+    return await this.session.loadExtension(unpackedPath, {allowFileAccess: false});
   }
 
   async _removeFromSession(extensionId) {

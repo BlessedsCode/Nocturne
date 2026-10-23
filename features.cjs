@@ -23,6 +23,7 @@ const settle=page=>page.evaluate(()=>Promise.all(document.getAnimations().map(a=
   assert.equal(await page.locator('#settings-button').count(),1);assert.equal(await page.locator('#rail-settings').count(),0);
   await page.locator('.add-quick-link').click();await page.locator('#link-name').fill('Test site');await page.locator('#link-url').fill('https://example.com');await page.locator('#save-link').click();
   await page.waitForFunction(()=>document.querySelectorAll('#quick-links>.quick-link').length===4);
+  await page.locator('#rail-links [title="Test site"]').waitFor({state:'attached'});
   assert.equal(await page.locator('#rail-links [title="Test site"]').count(),1);
   const row=page.locator('.link-row').filter({hasText:'Test site'});await row.locator('[title="Изменить"]').click();await page.locator('#link-name').fill('Renamed');await page.locator('#save-link').click();
   await page.locator('.link-row').filter({hasText:'Renamed'}).locator('[title="Выше"]').click();

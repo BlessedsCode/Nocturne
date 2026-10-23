@@ -84,3 +84,7 @@ test('ExtensionsManager deduplicates catalog and handles install/toggle/remove',
 
   await fs.rm(tmpDir, {recursive: true, force: true});
 });
+
+test('extension loading does not grant local file access',async()=>{
+ let options;const mgr=new ExtensionsManager({directory:'unused',session:{extensions:{loadExtension:async(_path,value)=>{options=value;return {id:'test'};}}}});await mgr._loadIntoSession('fixture');assert.equal(options.allowFileAccess,false);
+});

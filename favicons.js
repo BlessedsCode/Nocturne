@@ -62,19 +62,19 @@ function setupFavicons({directory,fetch}){
  }
 
  const pending=new Map();
- async function read(url,limit){
+ async function read(url,limit,truncate=false){
   const response=await fetch(url,{signal:AbortSignal.timeout(6000),credentials:'omit',redirect:'follow'});
   const finalURL=response.url||url;
   if(!response.ok||!/^https?:\/\//i.test(finalURL))throw new Error('unavailable');
   const reader=response.body.getReader(),chunks=[];let size=0;
-  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit)break;chunks.push(Buffer.from(value));}}finally{try{await reader.cancel?.();}catch{}}
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit){if(!truncate)throw new Error('Icon response exceeds limit');chunks.push(Buffer.from(value).subarray(0,Math.max(0,limit-(size-value.length))));break;}chunks.push(Buffer.from(value));}}finally{try{await reader.cancel?.();}catch{}}
   return {bytes:Buffer.concat(chunks),type:response.headers.get('content-type')||'',url:finalURL};
  }
  const unescape=s=>s.replace(/&amp;/g,'&').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
  async function discover(origin){
   const candidates=[];
   try{
-   const page=await read(origin,131072);
+   const page=await read(origin,131072,true);
    const html=page.bytes.toString('utf8');
    for(const tag of html.match(/<link\b[^>]*>/gi)||[]){
     const attrs={};
