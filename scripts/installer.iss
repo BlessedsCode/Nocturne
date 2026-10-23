@@ -33,7 +33,7 @@ UninstallDisplayName=Nocturne
 UninstallDisplayIcon={app}\Nocturne.exe
 CloseApplications=no
 RestartApplications=no
-ChangesAssociations=no
+ChangesAssociations=yes
 ChangesEnvironment=no
 SetupLogging=yes
 
@@ -51,8 +51,25 @@ Source: "{#BuildDirectory}\*"; DestDir: "{app}"; Flags: ignoreversion recursesub
 Name: "{group}\Nocturne"; Filename: "{app}\Nocturne.exe"
 Name: "{autodesktop}\Nocturne"; Filename: "{app}\Nocturne.exe"; Tasks: desktopicon
 
+[Registry]
+; Register as an available browser for this user. Windows owns the actual default choice.
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Nocturne"; ValueData: "Software\Clients\StartMenuInternet\Nocturne\Capabilities"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne"; ValueType: string; ValueData: "Nocturne"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\DefaultIcon"; ValueType: string; ValueData: """{app}\Nocturne.exe"",0"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\shell\open\command"; ValueType: string; ValueData: """{app}\Nocturne.exe"""
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Nocturne"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Nocturne — веб-браузер с защитой и отдельными профилями"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: """{app}\Nocturne.exe"",0"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\Capabilities\URLAssociations"; ValueType: string; ValueName: "http"; ValueData: "NocturneURL"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Nocturne\Capabilities\URLAssociations"; ValueType: string; ValueName: "https"; ValueData: "NocturneURL"
+Root: HKCU; Subkey: "Software\Classes\NocturneURL"; ValueType: string; ValueData: "Nocturne URL"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\NocturneURL"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\NocturneURL\DefaultIcon"; ValueType: string; ValueData: """{app}\Nocturne.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\NocturneURL\shell\open\command"; ValueType: string; ValueData: """{app}\Nocturne.exe"" -- ""%1"""
+
 [Run]
 Filename: "{app}\Nocturne.exe"; Description: "{cm:LaunchBrowser}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Nocturne.exe"; Parameters: "--default-browser-settings"; Description: "{cm:ChooseDefaultBrowser}"; Flags: nowait postinstall unchecked skipifsilent
 
 ; User profiles are deliberately outside {app}; uninstall never removes them.
 
@@ -60,9 +77,11 @@ Filename: "{app}\Nocturne.exe"; Description: "{cm:LaunchBrowser}"; Flags: nowait
 russian.DesktopShortcut=Создать ярлык на рабочем столе
 russian.ShortcutGroup=Ярлыки:
 russian.LaunchBrowser=Открыть Nocturne
+russian.ChooseDefaultBrowser=Выбрать Nocturne браузером по умолчанию в Windows
 english.DesktopShortcut=Create a desktop shortcut
 english.ShortcutGroup=Shortcuts:
 english.LaunchBrowser=Open Nocturne
+english.ChooseDefaultBrowser=Choose Nocturne as your default browser in Windows
 
 [Messages]
 russian.WelcomeLabel1=Добро пожаловать%nв Nocturne
@@ -109,6 +128,7 @@ begin
   WizardForm.RunList.Left := ScaleX(30);
   WizardForm.RunList.Top := ScaleY(265);
   WizardForm.RunList.Width := WizardForm.FinishedPage.Width - ScaleX(60);
+  WizardForm.RunList.Height := ScaleY(65);
   WizardForm.PageNameLabel.Font.Name := 'Georgia';
   WizardForm.PageNameLabel.Font.Size := 14;
   WizardForm.PageNameLabel.Font.Style := [];

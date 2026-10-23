@@ -11,6 +11,7 @@ const {translateEnglish}=require('./english-query');
 const {discoverBrowsers,openBrowserExport,definitions:browserDefinitions}=require('./browser-import');
 const {AutomaticImport}=require('./automatic-import');
 const {AppUpdates}=require('./app-updates');
+const {DefaultBrowser,externalURLs}=require('./default-browser');
 const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
 const {ExtensionsManager}=require('./extensions');
@@ -30,6 +31,14 @@ let profileIntroduction=false;
 let vault, downloads, profile, icons, security, combinedSearch;
 let automaticImport;
 let appUpdates;
+let defaultBrowser,uiReady=false;
+const pendingExternalURLs=externalURLs(process.argv);
+let pendingDefaultSettings=process.argv.slice(1,process.argv.indexOf('--')<0?undefined:process.argv.indexOf('--')).includes('--default-browser-settings');
+function openExternalIntents(){
+ if(!uiReady||!win||win.isDestroyed())return;
+ if(pendingExternalURLs.length){overlay=false;tell('close-panels');for(const url of pendingExternalURLs.splice(0)){const result=newTab(url,{background:false});if(result?.error){tell('toast',result.error);break;}}win.show();win.focus();}
+ if(pendingDefaultSettings){pendingDefaultSettings=false;defaultBrowser.open().catch(reportError);}
+}
 let extensionsManager;
 let adBlock,sponsorBlock;
 function refreshContentFilters(){for(const t of tabs.values())if(t.view&&!t.view.webContents.isDestroyed())t.view.webContents.send('content-filter-settings');}
@@ -46,7 +55,7 @@ app.setPath('userData',profileDirectory);
 app.setPath('sessionData',profileDirectory);
 const ownsProfile=app.requestSingleInstanceLock();
 if(!ownsProfile)app.quit();
-app.on('second-instance',()=>{if(win&&!win.isDestroyed()){if(win.isMinimized())win.restore();if(profileMode==='personal')tell('profile-enter');else{win.show();win.focus();}}});
+app.on('second-instance',(_event,argv)=>{pendingExternalURLs.push(...externalURLs(argv).slice(0,16-pendingExternalURLs.length));const end=argv.indexOf('--');if(argv.slice(1,end<0?undefined:end).includes('--default-browser-settings'))pendingDefaultSettings=true;openExternalIntents();if(win&&!win.isDestroyed()){if(win.isMinimized())win.restore();if(profileMode==='personal')tell('profile-enter');else{win.show();win.focus();}}});
 function revealPersonalProfile(animate){
  if(profileMode!=='personal'||!win||win.isDestroyed())return;
  profileIntroduction=true;layout();
@@ -507,6 +516,7 @@ async function closeTab(id){
  t.closing=closing;return closing;
 }
 app.whenReady().then(async()=>{
+  defaultBrowser=new DefaultBrowser({app,shell});
   if(!ownsProfile)return;
   const accelerators=[['F12','devtools'],['Ctrl+Shift+I','devtools'],['Ctrl+Shift+J','console'],['Ctrl+Shift+C','inspect-picker'],['Ctrl+T','new-tab'],['Ctrl+W','close-tab'],['Ctrl+Shift+T','reopen-tab'],['Ctrl+Tab','next-tab'],['Ctrl+Shift+Tab','previous-tab'],['Ctrl+PageDown','next-tab'],['Ctrl+PageUp','previous-tab'],['Ctrl+L','address'],['Alt+D','address'],['F6','address'],['F5','reload'],['Ctrl+R','reload'],['Ctrl+F5','hard-reload'],['Ctrl+Shift+R','hard-reload'],['Ctrl+F','find'],['F3','find-next'],['Shift+F3','find-previous'],['Ctrl+H','history'],['Ctrl+J','downloads'],['Ctrl+D','bookmark'],['Ctrl+P','print'],['Ctrl+S','save-page'],['Ctrl+U','source'],['F11','fullscreen'],['Alt+Left','back'],['Alt+Right','forward'],['Alt+Home','home'],['Ctrl+Shift+Delete','privacy'],...Array.from({length:9},(_,index)=>['Ctrl+'+(index+1),'tab-'+(index+1)])];
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Браузер',submenu:accelerators.map(([accelerator,action])=>({label:action,accelerator,click:()=>setImmediate(()=>runBrowserAction(action).catch(reportError))}))}]));
@@ -577,14 +587,16 @@ app.whenReady().then(async()=>{
   attachBrowserControls(win.webContents,true);
   win.webContents.on('will-attach-webview',event=>event.preventDefault());
   win.webContents.on('did-finish-load',()=>{
+    uiReady=true;
     profileIntroduction=false;
     requestOverlay(false);
-    if(tabs.size){layout();state();return;}
+    if(tabs.size){openExternalIntents();layout();state();return;}
     const restore=profile.preferences.restoreSession?profile.sessionState:{tabs:[],active:0};
     for(let i=0;i<restore.tabs.length;i++){
       const entry=restore.tabs[i];
       newTab(entry.url,{background:i!==restore.active,lazy:profile.preferences.memorySaver&&i!==restore.active,metadata:entry});
     }
+    openExternalIntents();
     if(!tabs.size)newTab();
   });
   win.on('resize',layout);
@@ -636,6 +648,8 @@ app.whenReady().then(async()=>{
     try {
     const wc=current()?.view?.webContents;
     if(action==='app-update-status')return appUpdates.status();
+    if(action==='default-browser-status')return await defaultBrowser.status();
+    if(action==='default-browser-open')return await defaultBrowser.open();
     if(action==='app-update-check')return await appUpdates.check();
     if(action==='app-update-download')return await appUpdates.download();
     if(action==='app-update-install')return await appUpdates.install();
