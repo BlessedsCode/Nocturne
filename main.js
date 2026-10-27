@@ -239,10 +239,12 @@ function layout() {
     }
   }
 }
-function attachTabWebContents(t, url) {
+function attachTabWebContents(t, url, nativeOptions) {
   if (t.view) return t.view.webContents;
   t.view = new WebContentsView({
+    ...(nativeOptions?.webContents?{webContents:nativeOptions.webContents}:{}),
     webPreferences: {
+      ...nativeOptions?.webPreferences,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -256,24 +258,36 @@ function attachTabWebContents(t, url) {
     }
   });
   win.contentView.addChildView(t.view);
+  const attachedView=t.view;
   const wc = t.view.webContents;
+  wc.once('destroyed',()=>{
+    // window.close() from a native child must remove only that tab. Discard,
+    // explicit tab closure and app shutdown have their own lifecycle handlers.
+    if(!shuttingDown&&tabs.get(t.id)===t&&t.view===attachedView&&!t.sleeping&&!t.closing)finishCloseTab(t.id);
+  });
   wc.on('dom-ready',()=>wc.executeJavaScriptInIsolatedWorld(998,[{code:'('+watchEdits.toString()+')()'}]).catch(()=>{}));
   wc.setZoomFactor(profile.preferences.zoom / 100);
   let popupTimes = [];
   wc.setWindowOpenHandler(({url, disposition}) => {
     popupTimes = popupTimes.filter(time => Date.now() - time < 60000);
-    const isUserClick = disposition === 'background-tab' || disposition === 'new-window' || disposition === 'foreground-tab';
-    if (/^https?:\/\//i.test(url) && (isUserClick || popupTimes.length < 30)) {
-      if (!isUserClick) popupTimes.push(Date.now());
-      newTab(url, { background: disposition === 'background-tab' });
-    } else security.record(url, 'popup');
-    return { action: 'deny' };
+    const isUserClick = disposition === 'background-tab' || disposition === 'foreground-tab';
+    const blank=url==='about:blank'||url==='';
+    if((!/^https?:\/\//i.test(url)&&!blank)||tabs.size>=40||(!isUserClick&&popupTimes.length>=30)){
+      security.record(url,'popup');return {action:'deny'};
+    }
+    if(!isUserClick)popupTimes.push(Date.now());
+    // Let Chromium create the real Window relationship. Manually loadURL'ing a
+    // replacement tab loses window.opener, postMessage, POST bodies and referrers.
+    return {action:'allow',outlivesOpener:true,overrideBrowserWindowOptions:{webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,preload:path.join(__dirname,'site-preload.js'),partition:'persist:nocturne'}},createWindow:options=>{
+      const child=newTab(url||'about:blank',{background:disposition==='background-tab',nativeOptions:options,openerId:t.id,authPopup:blank||disposition==='new-window'});
+      return liveContents(tabs.get(child.id));
+    }};
   });
   wc.on('will-navigate', (event, targetUrl) => {
-    if (!/^https?:\/\//i.test(targetUrl)) event.preventDefault();
+    if (!/^https?:\/\//i.test(targetUrl)&&!(t.openerId&&targetUrl==='about:blank')) event.preventDefault();
   });
   wc.on('will-redirect', (event, targetUrl) => {
-    if (!/^https?:\/\//i.test(targetUrl)) event.preventDefault();
+    if (!/^https?:\/\//i.test(targetUrl)&&!(t.openerId&&targetUrl==='about:blank')) event.preventDefault();
   });
   wc.on('page-title-updated', (_event, title) => {
     t.title = title;
@@ -308,10 +322,13 @@ function attachTabWebContents(t, url) {
     }
     state();
   });
-  wc.on('did-navigate', (_event, navUrl, status) => {
+  wc.on('did-navigate', (_event, navUrl) => {
     if (t.url && new URL(t.url).origin !== new URL(navUrl).origin) t.favicon = '';
     t.url = navUrl;
-    t.error = status >= 400 ? 'HTTP ' + status : null;
+    // HTTP errors are loaded documents too: they may contain a site's access
+    // check, sign-in instructions or recovery links. Only transport failures
+    // belong on the browser's error page (did-fail-load below).
+    t.error = null;
     layout();
     state();
   });
@@ -355,6 +372,7 @@ async function canDiscardTab(t) {
   if (!t || t.id === active) return false;
   if (!t.view || !t.url || !/^https?:\/\//i.test(t.url)) return false;
   if (t.sleeping || t.loading || t.htmlFullScreen || t.neverDiscard || t.closing || t.hasPostHistory) return false;
+  if(t.authPopup||[...tabs.values()].some(child=>child.authPopup&&child.openerId===t.id))return false;
   try {
     const host = new URL(t.url).hostname.toLowerCase();
     const exceptions = Array.isArray(profile?.preferences?.discardExceptions) ? profile.preferences.discardExceptions : [];
@@ -450,11 +468,16 @@ function newTab(url, options = {}) {
     htmlFullScreen:false
   };
   tabs.set(t.id,t); active=t.id;
-  if(url&&options.lazy){t.url=url;t.title=options.metadata?.title||new URL(url).hostname;t.favicon=options.metadata?.favicon||'';t.neverDiscard=!!options.metadata?.neverDiscard;t.sleeping=true;layout();state();}
+  if(options.nativeOptions){
+    t.url=url;t.title=/^https?:/.test(url)?new URL(url).hostname:'Окно сайта';t.loading=true;t.openerId=options.openerId;t.authPopup=!!options.authPopup;
+    attachTabWebContents(t,url,options.nativeOptions);layout();state();
+  }
+  else if(url&&options.lazy){t.url=url;t.title=options.metadata?.title||new URL(url).hostname;t.favicon=options.metadata?.favicon||'';t.neverDiscard=!!options.metadata?.neverDiscard;t.sleeping=true;layout();state();}
   else if(url){navigate(url);t.neverDiscard=!!options.metadata?.neverDiscard;}
   else {layout();state();}
   if(inBackground&&previous){active=previous;const p=tabs.get(previous);if(p)p.lastActiveAt=Date.now();layout();state();}
   if(!inBackground){focusActiveTab();if(!url)win.webContents.send('focus-address');}
+  return {id:t.id};
 }
 function navigate(input) {
   let url;
@@ -489,7 +512,7 @@ function finishCloseTab(id){
   tabs.delete(id);
   if(shuttingDown||!win||win.isDestroyed())return;
   if(active===id){
-    active=profile.preferences.closeToLeft?(ids[index-1]||ids[index+1]):(ids[index+1]||ids[index-1]);
+    active=tabs.has(t.openerId)?t.openerId:profile.preferences.closeToLeft?(ids[index-1]||ids[index+1]):(ids[index+1]||ids[index-1]);
     const nextTab=tabs.get(active);
     if(nextTab){
       nextTab.lastActiveAt=Date.now();
