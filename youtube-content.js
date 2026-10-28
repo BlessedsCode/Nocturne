@@ -4,7 +4,11 @@
  function config(p={}){const result={enabled:p.ytContentEnabled===true};for(const key of ['AI','Clickbait','Voice','Quality'])result[key]=modes.has(p['ytContent'+key])?p['ytContent'+key]:'off';for(const key of ['Words','Channels'])result[key]=typeof p['ytContent'+key]==='string'?p['ytContent'+key].slice(0,4000).split('\n').map(s=>s.trim().toLowerCase()).filter(Boolean).slice(0,100):[];return result;}
  function classify(title,channel,c){
   if(!c.enabled)return [];title=String(title||'').slice(0,2000);channel=String(channel||'').trim().toLowerCase();const hits=[];
-  const add=(key,label,reason)=>{if(c[key]!=='off')hits.push({key,label,reason,mode:c[key]});};
+  // Topic discussions, tutorials and explicit denials are not disclosures.
+  // Prefer missing a match over hiding a normal educational video.
+  const discussion=/(?:\b(?:how to|tutorial|guide|explained|detect|spot|debunk|review)\b|(?:^|[\s:—–-])(?:как|урок|обзор|разбор|обучение|распознать|отличить|проверить)(?:[\s:?!,.]|$))/iu.test(title);
+  const denial=/(?:\b(?:not|never|no)\s+(?:ai[- ]generated|ai[- ]voice)|не\s+(?:сгенерирован[аоы]?|создан[оы]?|озвучен[аоы]?)\s+(?:ии|нейросетью)|без\s+(?:ии|нейросетей|нейросети))/iu.test(title);
+  const add=(key,label,reason)=>{if(c[key]!=='off'&&(!['AI','Voice'].includes(key)||!discussion&&!denial))hits.push({key,label,reason,mode:c[key]});};
   if(/(?:ai[- ]generated|generated (?:with|by) (?:ai|sora|veo)|создан[оы]? (?:с помощью (?:ии|нейросети)|нейросетью|ии)|сгенерирован[аоы]? (?:ии|нейросетью)|#aigenerated)/iu.test(title))add('AI','Указание на AI','В названии автор указал генерацию с помощью AI. Это текстовый сигнал, а не анализ кадров.');
   if(/(?:ai[- ](?:voice|narration)|text[- ]to[- ]speech|озвуч(?:ено|ка) (?:ии|нейросетью)|синтезированн[а-я]* голос)/iu.test(title))add('Voice','Синтез речи','В названии явно указан синтез речи. Звук не анализировался.');
   if(/(?:вы не поверите|от вас скрывают|шок!|срочно!|you won.t believe|they don.t want you to know)/iu.test(title))add('Clickbait','Возможный кликбейт','В названии есть эмоциональная формулировка. Соответствие содержанию не проверялось.');

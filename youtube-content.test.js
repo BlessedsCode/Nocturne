@@ -12,3 +12,8 @@ test('personal rules are bounded literal phrases and exact channel names',()=>{
  assert.equal(classify('A+B video','',c)[0].key,'Words');assert.equal(classify('Hello','some channel',c)[0].key,'Channels');assert.deepEqual(classify('Hello','some channel extra',c),[]);
  assert.equal(config({ytContentWords:'x'.repeat(5000)}).Words[0].length,4000);
 });
+test('AI topic tutorials and explicit denials never trigger automatic AI hiding',()=>{
+ const c=config({ytContentEnabled:true,ytContentAI:'skip',ytContentVoice:'skip'});
+ for(const title of ['How to spot AI-generated videos','AI-generated videos explained','AI voice tutorial','Как распознать сгенерированное ИИ видео','Разбор: озвучено нейросетью','Not AI-generated: real camera footage','Не сгенерировано ИИ','Без ИИ: озвучено нейросетью?'])assert.deepEqual(classify(title,'',c),[],title);
+ assert.equal(classify('AI-generated short film','',c)[0].mode,'skip');
+});
