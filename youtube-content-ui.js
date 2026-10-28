@@ -1,0 +1,13 @@
+(function(){
+ const card=document.createElement('div');card.className='setting-card';card.id='youtube-content-settings';
+ const heading=document.createElement('h3');heading.textContent='YouTube · меньше лишнего';card.append(heading);
+ const intro=document.createElement('p');intro.textContent='Локальные правила для рекомендаций и Shorts. Ничего не отправляется на анализ. Пометка показывает причину, а не вердикт о ролике.';card.append(intro);
+ const enabled=document.createElement('label');enabled.className='toggle';enabled.textContent='Фильтровать контент YouTube';const check=document.createElement('input');check.type='checkbox';check.dataset.browserSetting='ytContentEnabled';enabled.append(check);card.append(enabled);
+ for(const [key,label,description]of [['AI','Указания на AI','Явное указание генерации в названии.'],['Clickbait','Возможный кликбейт','Эмоциональные фразы в названии; содержание не сравнивается.'],['Voice','Указания на AI-озвучку','Явное упоминание синтеза речи в названии.'],['Quality','Навязчивое оформление','Повторяющиеся !!! и ???; не оценка качества.']]){
+  const row=document.createElement('label');row.className='field-label';row.textContent=label;const select=document.createElement('select');select.dataset.browserSetting='ytContent'+key;for(const [value,text]of [['off','Выключено'],['mark','Помечать'],['skip','Пропускать']]){const option=document.createElement('option');option.value=value;option.textContent=text;select.append(option);}row.append(select);const help=document.createElement('p');help.textContent=description;card.append(row,help);
+ }
+ for(const [key,label,placeholder]of [['Words','Скрывать по словам в названии','Каждое слово или фраза с новой строки'],['Channels','Скрывать каналы','Точное отображаемое имя канала, по одному на строку']]){const row=document.createElement('label');row.className='field-label';row.textContent=label;const input=document.createElement('textarea');input.dataset.browserSetting='ytContent'+key;input.maxLength=4000;input.rows=3;input.placeholder=placeholder;input.style.width='100%';row.append(input);card.append(row);}
+ const help=document.createElement('p');help.textContent='«Пропускать» скрывает карточки и переключает активный Short. Обычный открытый ролик не закрывается. Кнопка «Показать на этой странице» временно возвращает скрытые карточки. Не больше пяти автоматических переключений Shorts за 15 секунд.';card.append(help);
+ const fact=document.createElement('p');fact.textContent='Проверка фактов, кадров и звука пока не подключена. Отсутствие пометки не означает, что ролик проверен или правдив.';card.append(fact);
+ document.getElementById('security-section').querySelector('h2').after(card);
+})();

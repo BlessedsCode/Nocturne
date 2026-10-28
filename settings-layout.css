@@ -1,0 +1,25 @@
+/* A single content column keeps labels, sliders and switches aligned. */
+#settings.settings-page{max-width:calc(100vw - 88px);min-width:0}
+.settings-content,.settings-scroll{min-width:0;min-height:0}
+.settings-toolbar{position:relative;flex-shrink:0;padding-right:64px}
+.settings-toolbar input{width:100%;max-width:780px;margin-inline:auto}
+.settings-toolbar #close-settings{position:absolute;right:18px;top:24px;flex:none;margin:0;width:32px;height:32px;display:grid;place-items:center;padding:0}
+.settings-scroll{overflow-x:hidden;scrollbar-gutter:stable}
+.settings-section{width:100%;overflow-wrap:anywhere}
+#appearance-section{max-width:680px}
+.settings-page .settings-section .field-label select,.settings-page .settings-section .control,.settings-page .settings-section .presets{width:100%;max-width:none}
+.settings-page .field-label textarea{display:block;box-sizing:border-box;max-width:100%;resize:vertical;min-height:88px;margin-top:10px;padding:12px 13px;font:12px/1.6 'Segoe UI',sans-serif;color:var(--palette-text,#dde3d3);background:var(--palette-pane,#141b13);border:1px solid #d6dcc229;border-radius:3px}
+.settings-page .field-label textarea:focus-visible{outline:2px solid var(--accent,#a5b792);outline-offset:2px}
+.settings-page .presets button{min-width:0}
+.settings-page .control input[type=range]{appearance:none;-webkit-appearance:none;display:block;box-sizing:border-box;height:20px;margin-top:10px;border:0;background:transparent;outline:none}
+.settings-page .control input[type=range]::-webkit-slider-runnable-track{height:2px;border:0;background:#aab59d66;border-radius:2px}
+.settings-page .control input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin-top:-6px;border:0;border-radius:50%;background:#b7c3a6}
+.settings-page .control input[type=range]:focus-visible{outline:2px solid #a5b792;outline-offset:4px;border-radius:3px}
+.settings-page .toggle input{flex:0 0 auto;margin-left:16px}
+@media(max-width:850px){
+ #settings.settings-page{grid-template-columns:170px minmax(0,1fr)}
+ .settings-sidebar{padding:24px 8px}.settings-sidebar h2{margin-inline:8px}
+ .settings-page .settings-tabs button{padding:10px 8px;font-size:11px;gap:8px}
+ .settings-scroll{padding:10px 18px 30px}.settings-toolbar{padding:20px 56px 16px 18px}.settings-toolbar #close-settings{right:12px;top:23px}
+ .setting-card{padding:18px 14px}
+}

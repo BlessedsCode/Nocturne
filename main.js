@@ -566,6 +566,7 @@ app.whenReady().then(async()=>{
   }});
   const sites=session.fromPartition('persist:nocturne');
   sites.registerPreloadScript({type:'frame',filePath:path.join(__dirname,'youtube-adblock.js')});
+  sites.registerPreloadScript({type:'frame',filePath:path.join(__dirname,'youtube-content.js')});
   const trustedContent=event=>event.sender.session===sites&&[...tabs.values()].some(t=>t.view?.webContents===event.sender);
   const contentFilterConfig=event=>{
     const tab=[...tabs.values()].find(t=>t.view?.webContents===event.sender);
@@ -573,6 +574,11 @@ app.whenReady().then(async()=>{
     return {ads:!!(trustedContent(event)&&/^https?:\/\//i.test(frameURL)&&adBlock.enabled(topURL)&&adBlock.enabled(frameURL)),visible:!!tab?.contentVisible};
   };
   ipcMain.handle('content-filter-config',contentFilterConfig);
+  ipcMain.handle('youtube-content-config',event=>{
+    let allowed=false;try{const url=new URL(event.senderFrame?.url);allowed=trustedContent(event)&&event.senderFrame===event.sender.mainFrame&&url.protocol==='https:'&&['www.youtube.com','youtube.com','m.youtube.com'].includes(url.hostname);}catch{}
+    if(!allowed)return {ytContentEnabled:false};
+    return Object.fromEntries(Object.entries(profile.preferences).filter(([key])=>key.startsWith('ytContent')));
+  });
   ipcMain.on('content-filter-bootstrap',event=>{event.returnValue=contentFilterConfig(event);});
   ipcMain.handle('content-cosmetics',(event,tokens)=>{
     if(!trustedContent(event)||!/^https?:\/\//i.test(event.senderFrame?.url||'')||!adBlock.enabled(event.sender.getURL()))return '';
@@ -728,7 +734,7 @@ app.whenReady().then(async()=>{
     }
     if(action==='favicon-get')return {icon:await icons.get(value)};
     if(action==='settings-get')return {...profile.preferences,downloadDirectory:profile.preferences.downloadDirectory||app.getPath('downloads'),versions:{app:app.getVersion(),chromium:process.versions.chrome,electron:process.versions.electron}};
-    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())liveContents(t)?.setZoomFactor(updated.zoom/100);if(['adBlock','sponsorBlock'].some(key=>Object.hasOwn(value||{},key)))refreshContentFilters();return updated;}
+    if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())liveContents(t)?.setZoomFactor(updated.zoom/100);if(Object.keys(value||{}).some(key=>['adBlock','sponsorBlock'].includes(key)||key.startsWith('ytContent')))refreshContentFilters();return updated;}
     if(action==='choose-download-directory'){const chosen=await dialog.showOpenDialog(win,{title:'Папка для загрузок',defaultPath:profile.preferences.downloadDirectory||app.getPath('downloads'),properties:['openDirectory','createDirectory']});if(chosen.canceled)return {canceled:true};profile.preferences.downloadDirectory=chosen.filePaths[0];profile.write('browser-settings.json',profile.preferences);return {directory:chosen.filePaths[0]};}
     if(action==='history-list')return profile.history;
     if(action==='history-delete'){

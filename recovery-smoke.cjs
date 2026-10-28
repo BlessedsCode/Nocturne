@@ -1,7 +1,7 @@
 const {_electron:electron}=require('playwright-core');
 const assert=require('node:assert/strict'),path=require('node:path'),http=require('node:http');
 (async()=>{
- const server=http.createServer((req,res)=>{res.writeHead(req.url==='/missing'?404:200,{'content-type':'text/html'});res.end('<title>'+req.url+'</title><h1>Navigation fixture</h1>');});
+ const server=http.createServer((req,res)=>{if(req.url==='/offline'){req.socket.destroy();return;}res.writeHead(req.url==='/missing'?404:200,{'content-type':'text/html'});res.end('<title>'+req.url+'</title><h1>Navigation fixture</h1>');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
  const app=await require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+path.resolve('artifacts','recovery-profile-'+Date.now())],env});
@@ -10,10 +10,11 @@ const assert=require('node:assert/strict'),path=require('node:path'),http=requir
   await page.locator('#address').blur();await page.keyboard.press('Escape');
   const command=(name,value)=>page.evaluate(({name,value})=>window.browser.command(name,value),{name,value});
   await command('navigate',base+'/ok');await page.waitForFunction(()=>document.querySelector('.tab.active').textContent.includes('/ok'));
-  await command('navigate',base+'/missing');await page.waitForSelector('#error-page:not([hidden])');
+  await command('navigate',base+'/missing');await page.waitForFunction(()=>state.tabs.some(t=>t.id===state.active&&t.title==='/missing'&&!t.loading));assert.equal(await page.locator('#error-page').isVisible(),false);
   await command('back');await page.waitForFunction(()=>document.querySelector('.tab.active').textContent.includes('/ok')&&document.getElementById('error-page').hidden);
   assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].contentView.children[0].getVisible()),true);
-  await command('forward');await page.waitForSelector('#error-page:not([hidden])');
+  await command('forward');await page.waitForFunction(()=>state.tabs.some(t=>t.id===state.active&&t.title==='/missing'&&!t.loading));assert.equal(await page.locator('#error-page').isVisible(),false);
+  await command('navigate',base+'/offline');await page.waitForSelector('#error-page:not([hidden])');await command('back');await page.waitForFunction(()=>state.tabs.some(t=>t.id===state.active&&t.title==='/missing'&&!t.loading)&&document.getElementById('error-page').hidden);
   await command('navigate','nocturne://home');await page.waitForFunction(()=>!document.getElementById('reload').classList.contains('is-loading'));assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].contentView.children.length),0);
   await command('navigate',base+'/crash');await page.waitForFunction(()=>document.querySelector('.tab.active').textContent.includes('/crash'));
   await app.evaluate(({webContents},url)=>webContents.getAllWebContents().find(w=>w.getURL()===url).forcefullyCrashRenderer(),base+'/crash');

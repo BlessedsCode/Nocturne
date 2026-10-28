@@ -1,0 +1,14 @@
+// Public YouTube, isolated profile; never signs in or accesses a user's profile.
+const {_electron:electron}=require('playwright-core'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path');
+(async()=>{const root=path.resolve('artifacts','youtube-content-real-'+Date.now());await fs.mkdir(root,{recursive:true});const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;const app=await require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+path.join(root,'profile')],env});
+ try{const page=await app.firstWindow();await page.waitForSelector('.tab');await page.evaluate(()=>closePanels(false));const command=(name,value)=>page.evaluate(({name,value})=>window.browser.command(name,value),{name,value});await command('settings-update',{ytContentAI:'mark',sponsorBlock:false});await command('navigate','https://www.youtube.com/results?search_query=AI-generated+short+film');
+  await page.waitForFunction(()=>state.tabs.some(t=>t.url?.includes('youtube.com/results')&&!t.loading),null,{timeout:45000});
+  const id=await app.evaluate(({webContents})=>webContents.getAllWebContents().find(w=>w.getURL().includes('youtube.com/results')).id),native=code=>app.evaluate(({webContents},{id,code})=>webContents.fromId(id).executeJavaScript(code),{id,code});
+  let doc;for(let i=0;i<50;i++){doc=await native('({title:document.title,cards:document.querySelectorAll("ytd-video-renderer").length,marks:document.querySelectorAll("[data-nocturne-content]").length,sample:[...document.querySelectorAll("a#video-title")].slice(0,5).map(a=>a.textContent.trim())})');if(doc.cards>0)break;await page.waitForTimeout(300);}
+  if(!doc.cards){await fs.writeFile(path.join(root,'results.json'),JSON.stringify({status:'site-unavailable',document:doc},null,2));console.log('SITE UNAVAILABLE '+JSON.stringify(doc));return;}
+  await page.waitForTimeout(1000);const phrase=await native('document.querySelector("a#video-title").textContent.trim()');assert(phrase);
+  await command('settings-update',{ytContentWords:phrase});let hidden=0;for(let i=0;i<40;i++){hidden=await native('[...document.querySelectorAll("ytd-video-renderer")].filter(c=>c.style.getPropertyValue("display")==="none").length');if(hidden)break;await page.waitForTimeout(100);}assert(hidden>0,'Real YouTube cards must respond to a personal rule');
+  await command('settings-update',{ytContentEnabled:false});await page.waitForTimeout(700);assert.equal(await native('[...document.querySelectorAll("ytd-video-renderer")].filter(c=>c.style.getPropertyValue("display")==="none").length'),0);
+  const result={status:'pass',document:doc,hidden,disableRestored:true};await fs.writeFile(path.join(root,'results.json'),JSON.stringify(result,null,2));console.log('PASS '+JSON.stringify(result)+' '+root);
+ }finally{await app.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

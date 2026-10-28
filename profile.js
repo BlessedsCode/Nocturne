@@ -3,6 +3,7 @@ const path=require('node:path');
 const {randomUUID}=require('node:crypto');
 const defaults={
   searchEngine:'google',firstRunComplete:false,searchSuggestions:true,restoreSession:false,
+  ytContentEnabled:true,ytContentAI:'mark',ytContentClickbait:'off',ytContentVoice:'mark',ytContentQuality:'off',ytContentWords:'',ytContentChannels:'',
   backgroundTabs:false,closeToLeft:false,zoom:100,spellcheck:true,keepHistory:true,doNotTrack:false,
   askDownload:true,downloadDirectory:'',media:'block',notifications:'block',geolocation:'block',
   threatProtection:true,trackerProtection:true,adBlock:true,sponsorBlock:true,httpsOnly:true,scanDownloads:true,cloudProtection:false,
@@ -25,6 +26,8 @@ class Profile{
   for(const key of ['media','notifications','geolocation'])if(!['block','ask'].includes(this.preferences[key]))this.preferences[key]='block';
   if(!['safebrowsing','webrisk'].includes(this.preferences.cloudProvider))this.preferences.cloudProvider='safebrowsing';
   if(![5,15,30,60,120].includes(this.preferences.discardTimeoutMinutes))this.preferences.discardTimeoutMinutes=30;
+  for(const key of ['ytContentAI','ytContentClickbait','ytContentVoice','ytContentQuality'])if(!['off','mark','skip'].includes(this.preferences[key]))this.preferences[key]=defaults[key];
+  for(const key of ['ytContentWords','ytContentChannels'])this.preferences[key]=this.preferences[key].slice(0,4000);
   const history=this.read('history.json',[]),session=this.read('tabs.json',[]);
   this.history=Array.isArray(history)?history.filter(item=>item&&typeof item.url==='string'&&/^https?:\/\//i.test(item.url)).slice(0,1000).map(item=>({...item,id:randomUUID(),title:typeof item.title==='string'?item.title:item.url})):[];
   this.sessionState=require('./session-state').decodeSession(session);
@@ -51,6 +54,8 @@ class Profile{
    if(key==='discardTimeoutMinutes'&&[5,15,30,60,120].includes(value))this.preferences.discardTimeoutMinutes=value;
    if(key==='discardExceptions'&&Array.isArray(value))this.preferences.discardExceptions=value.filter(v=>typeof v==='string');
    if(key==='memorySaver'&&typeof value==='boolean')this.preferences.memorySaver=value;
+   if(['ytContentAI','ytContentClickbait','ytContentVoice','ytContentQuality'].includes(key)&&['off','mark','skip'].includes(value))this.preferences[key]=value;
+   if(['ytContentWords','ytContentChannels'].includes(key)&&typeof value==='string')this.preferences[key]=value.slice(0,4000);
   }
   this.write('browser-settings.json',this.preferences);return this.preferences;
  }
