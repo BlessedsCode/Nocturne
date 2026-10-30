@@ -1,4 +1,5 @@
 const iconPaths={
+ muted:'<path d="M11 5 6 9H3v6h3l5 4zM16 9l5 6m0-6-5 6"/>',
  'search-all':'<circle cx="10" cy="10" r="5.5"/><path d="m14 14 6 6M17 3h4v4M4 18v3h3"/>',
  move:'<path d="M12 3v18M3 12h18m-12-6 3-3 3 3m-9 3-3 3 3 3m3 3 3 3 3-3m3-9 3 3-3 3"/>',resize:'<path d="m9 19 10-10m-5 10 5-5"/>',
  back:'<path d="m14 6-6 6 6 6"/><path d="M8 12h12"/>',forward:'<path d="m10 6 6 6-6 6"/><path d="M4 12h12"/>',reload:'<path d="M20 6v6h-6"/><path d="M19.6 12a7.6 7.6 0 1 0-2 5.1"/>',

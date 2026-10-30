@@ -90,6 +90,7 @@ function state(immediate=false) {
         sleeping:!!t.sleeping,
         restoring:!!t.restoring,
         neverDiscard:!!t.neverDiscard,
+        muted:!!t.muted,
         error:t.error,
         security:t.security
       })),
@@ -106,6 +107,7 @@ function state(immediate=false) {
   }
 }
 function current() {return tabs.get(active);}
+function toggleTabMuted(id){const t=tabs.get(id);if(!t)return; t.muted=!t.muted;liveContents(t)?.setAudioMuted(t.muted);state();return {muted:t.muted};}
 async function requestOverlay(visible){
  const token=++overlaySequence;
  if(!visible){overlay=false;win.webContents.send('overlay-background',{token,clear:true});layout();return;}
@@ -260,6 +262,7 @@ function attachTabWebContents(t, url, nativeOptions) {
   win.contentView.addChildView(t.view);
   const attachedView=t.view;
   const wc = t.view.webContents;
+  wc.setAudioMuted(!!t.muted);
   wc.once('destroyed',()=>{
     // window.close() from a native child must remove only that tab. Discard,
     // explicit tab closure and app shutdown have their own lifecycle handlers.
@@ -463,6 +466,7 @@ function newTab(url, options = {}) {
     sleeping:false,
     restoring:false,
     neverDiscard:false,
+    muted:options.metadata?.muted===true,
     lastActiveAt:Date.now(),
     scrollPosition:null,
     htmlFullScreen:false
@@ -657,7 +661,7 @@ app.whenReady().then(async()=>{
     shuttingDown=true;
     combinedSearch?.cancel();
     for(const child of win.getChildWindows())child.destroy();
-    const savedTabs=[...tabs.values()];profile.write('tabs.json',{version:2,active:savedTabs.findIndex(t=>t.id===active),tabs:savedTabs.map(t=>({url:t.url,title:t.title,favicon:t.favicon||'',neverDiscard:!!t.neverDiscard}))});
+    const savedTabs=[...tabs.values()];profile.write('tabs.json',{version:2,active:savedTabs.findIndex(t=>t.id===active),tabs:savedTabs.map(t=>({url:t.url,title:t.title,favicon:t.favicon||'',neverDiscard:!!t.neverDiscard,muted:!!t.muted}))});
     profile.flush();
     icons.flush?.();
   });
@@ -814,6 +818,7 @@ app.whenReady().then(async()=>{
     if(action==='navigate')return navigate(value);
     if(action==='open-tab'&&typeof value==='string'&&/^https?:\/\//i.test(value))return newTab(value);
     if(action==='new')newTab();
+    if(action==='tab-toggle-mute')return toggleTabMuted(value);
     if(action==='tab-context-menu'){
       const t=tabs.get(typeof value==='object'?value?.id:value);
       if(!t)return;
@@ -826,6 +831,7 @@ app.whenReady().then(async()=>{
       const isDomainExcluded=!!(host&&exceptions.some(ex=>host===ex.toLowerCase()||host.endsWith('.'+ex.toLowerCase())));
 
       const template=[
+        {label:t.muted?'Включить звук вкладки':'Отключить звук вкладки',click:()=>toggleTabMuted(t.id)},
         {
           label:'Обновить вкладку',
           enabled:!isSleeping&&!!t.view,

@@ -151,12 +151,16 @@ function createTabElement(t, s){
     ids.splice(before?targetIdx:targetIdx+1,0,srcId);
     command('reorder-tabs',ids);
   };
+  updateTabElement(tab,t,s);
   return tab;
 }
 function updateTabElement(tab, t, s){
   tab.classList.toggle('active', t.id===s.active);
   tab.classList.toggle('tab-loading', !!t.loading);
   tab.classList.toggle('tab-sleeping', !!t.sleeping);
+  let mute=tab.querySelector('.tab-mute');
+  if(t.muted&&!mute){mute=button('','Включить звук вкладки',e=>{e.stopPropagation();command('tab-toggle-mute',t.id);},'tab-mute');mute.setAttribute('aria-label','Включить звук вкладки');mute.append(createIcon('muted'));tab.querySelector('.tab-title').after(mute);}
+  if(!t.muted&&mute)mute.remove();
   const titleSpan=tab.querySelector('.tab-title');
   if(titleSpan && titleSpan.textContent!==t.title){
     titleSpan.textContent=t.title;
