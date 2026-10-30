@@ -16,6 +16,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19041
 OutputDir={#OutputDirectory}
 OutputBaseFilename=Nocturne-Setup-{#AppVersion}-x64
+SetupIconFile=..\assets\icon.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern dark includetitlebar hidebevels
@@ -48,8 +49,8 @@ Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm
 Source: "{#BuildDirectory}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Nocturne"; Filename: "{app}\Nocturne.exe"
-Name: "{autodesktop}\Nocturne"; Filename: "{app}\Nocturne.exe"; Tasks: desktopicon
+Name: "{group}\Nocturne"; Filename: "{app}\Nocturne.exe"; AppUserModelID: "dev.nocturne.browser"
+Name: "{autodesktop}\Nocturne"; Filename: "{app}\Nocturne.exe"; Tasks: desktopicon; AppUserModelID: "dev.nocturne.browser"
 
 [Registry]
 ; Register as an available browser for this user. Windows owns the actual default choice.

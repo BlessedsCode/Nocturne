@@ -1,0 +1,37 @@
+const {_electron:electron}=require('playwright-core'),assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs/promises'),{spawn}=require('node:child_process'),{randomBytes,createCipheriv}=require('node:crypto');
+const {runNative,readChromium}=require('../src/main/automatic-import');
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+function powershell(script,input=''){return new Promise((resolve,reject)=>{const child=spawn(path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});let output='',error='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>error+=chunk);child.on('error',reject);child.on('close',code=>code?reject(new Error('Fixture helper failed: '+error)):resolve(output.trim()));child.stdin.end(input);});}
+(async()=>{
+ const root=path.resolve('artifacts','automatic-import-'+Date.now());await fs.mkdir(root,{recursive:true});
+ const installed=(await require('../src/main/browser-import').discoverBrowsers()).find(browser=>['zen','firefox'].includes(browser.id));if(!installed)throw new Error('This native integration test needs an installed NSS browser.');const library=path.dirname(installed.executable);
+ const fixture=path.join(root,'nss'),locked=path.join(root,'locked');
+ const fixtureScript="& ([scriptblock]::Create([IO.File]::ReadAllText('"+path.resolve('scripts/create-nss-fixture.ps1').replace(/'/g,"''")+"'))) -LibraryDirectory '"+library.replace(/'/g,"''")+"' -ProfileDirectory '";
+ await powershell(fixtureScript+fixture.replace(/'/g,"''")+"'");await powershell(fixtureScript+locked.replace(/'/g,"''")+"' -PrimaryPassword 'fixture-primary'");
+ const before=await fs.readFile(path.join(fixture,'key4.db'));const native=await runNative({mode:'nss',directory:library,profile:fixture,password:''});assert.equal(native.ok,true);assert.equal(native.entries[0].password,'SYNTHETIC_ONLY_123');assert.deepEqual(await fs.readFile(path.join(fixture,'key4.db')),before);
+ assert.equal((await runNative({mode:'nss',directory:library,profile:locked,password:''})).code,'primary-password');assert.equal((await runNative({mode:'nss',directory:library,profile:locked,password:'fixture-primary'})).entries[0].username,'fixture-user');
+ // Real Windows DPAPI + AES-GCM against synthetic Chromium Login Data, never a user's database.
+ const protect=buffer=>powershell("Add-Type -AssemblyName System.Security; $bytes=[Convert]::FromBase64String([Console]::In.ReadToEnd());[Console]::Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))",buffer.toString('base64'));
+ const key=randomBytes(32),iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv),encrypted=Buffer.concat([Buffer.from('v10'),iv,cipher.update('SYNTHETIC_AES_PASSWORD'),cipher.final(),cipher.getAuthTag()]);
+ const protectedKey=await protect(key),legacy=await protect(Buffer.from('SYNTHETIC_DPAPI_PASSWORD'));await fs.writeFile(path.join(root,'Local State'),JSON.stringify({os_crypt:{encrypted_key:Buffer.concat([Buffer.from('DPAPI'),Buffer.from(protectedKey,'base64')]).toString('base64')}}));
+ const app=await require('./test-profile.cjs').launch(electron,{args:[path.resolve('.'),'--user-data-dir='+path.join(root,'destination')],env});
+ try{
+  // Confirm SQLite is available inside the actual Electron runtime as well as Node.
+  await app.evaluate(({app},info)=>{const {DatabaseSync}=process.getBuiltinModule('node:sqlite');const database=new DatabaseSync(info.file);database.exec('CREATE TABLE logins(origin_url TEXT,username_value TEXT,password_value BLOB,blacklisted_by_user INTEGER)');const insert=database.prepare('INSERT INTO logins VALUES(?,?,?,0)');insert.run('https://aes.example','aes',Buffer.from(info.encrypted,'base64'));insert.run('https://dpapi.example','dpapi',Buffer.from(info.legacy,'base64'));insert.run('https://bound.example','bound',Buffer.from('v20blocked'));insert.run('https://bad.example','bad',Buffer.from('invalid'));database.close();},{file:path.join(root,'Login Data'),encrypted:encrypted.toString('base64'),legacy});
+  const chromium=await readChromium({directory:root,root});assert.equal(chromium.entries.length,2);assert.equal(chromium.entries[0].password,'SYNTHETIC_AES_PASSWORD');assert.equal(chromium.entries[1].password,'SYNTHETIC_DPAPI_PASSWORD');assert.equal(chromium.blocked,1);assert.equal(chromium.failed,1);
+  await app.evaluate(({app},info)=>{
+   const requireLocal=process.getBuiltinModule('node:module').createRequire(process.getBuiltinModule('node:path').join(app.getAppPath(),'src','main','main.js')),{AutomaticImport}=requireLocal('./automatic-import');
+   const original=AutomaticImport.prototype.scan;AutomaticImport.prototype.scan=function(){this.discover=async()=>[
+    {id:'zen',name:'Zen Browser',executable:info.executable,profiles:[{kind:'nss',directory:info.fixture}]},
+    {id:'edge',name:'Microsoft Edge',profiles:[{kind:'chromium',directory:info.root,root:info.root}]},
+    {id:'firefox',name:'Firefox (основной пароль)',executable:info.executable,profiles:[{kind:'nss',directory:info.locked}]}
+   ];return original.call(this);};
+  },{root,fixture,locked,executable:installed.executable});
+  const page=await app.firstWindow(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.waitForSelector('.tab');await page.locator('#settings-button').click();await page.locator('[data-section=passwords]').click();await page.waitForSelector('#settings-import-select-zen');assert.equal(await page.locator('#settings-import-auto').isDisabled(),true);
+  await page.locator('#settings-import-select-zen').check();await page.locator('#settings-import-auto').click();await page.waitForFunction(()=>document.querySelector('#settings-import-auto-status').textContent.startsWith('Готово'));assert.equal((await page.evaluate(()=>window.browser.command('passwords-list'))).length,1);
+  await page.locator('#settings-import-select-edge').check();await page.locator('#settings-import-select-firefox').check();await page.locator('#settings-import-auto').click();await page.waitForSelector('#settings-import-unlock-firefox');assert.equal((await page.evaluate(()=>window.browser.command('passwords-list'))).length,3);
+  assert.match(await page.locator('.auto-import-result[data-browser-id=edge]').textContent(),/App-Bound/);await page.locator('#settings-import-unlock-firefox').click();await page.locator('#import-primary-value').fill('fixture-primary');await page.locator('#import-primary-submit').click();await page.waitForFunction(()=>document.querySelector('.auto-import-result[data-browser-id=firefox]').textContent.includes('Перенос завершён.'));
+  const encryptedVault=await fs.readFile(path.join(root,'destination','passwords.enc'));assert(!encryptedVault.includes(Buffer.from('SYNTHETIC')));assert(!(await page.locator('body').textContent()).includes('SYNTHETIC'));assert.deepEqual(errors,[]);await page.screenshot({path:'artifacts/automatic-password-import.png'});
+ }finally{await app.close();}
+ console.log('PASS: actual NSS AES login decryption; primary-password rejection/unlock; source key DB unchanged; Windows DPAPI and Chromium AES-GCM; app-bound blocked without bypass; Electron SQLite; real checkbox import UI and primary-password dialog; encrypted destination; no CSV or plaintext UI');
+})().catch(error=>{console.error(error);process.exitCode=1;});

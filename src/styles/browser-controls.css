@@ -1,0 +1,6 @@
+#page-find{position:absolute;right:130px;top:5px;z-index:18;display:flex;align-items:center;gap:8px;height:46px;width:min(460px,calc(100vw - 310px));padding:8px 10px;background:var(--palette-pane);border:1px solid #ffffff30;border-radius:4px;box-shadow:0 5px 18px #0005;-webkit-app-region:no-drag}
+#page-find input{flex:1;min-width:0;font-size:12px;color:var(--palette-text)}#page-find input:focus-visible{outline:none}
+#page-find-count{font-size:10px;white-space:nowrap;color:var(--palette-muted);min-width:34px;text-align:right}
+ #site-overlay-background{position:fixed;left:76px;top:112px;width:calc(100% - 88px);height:calc(100% - 124px);z-index:9;object-fit:fill;background:var(--palette-pane);border-radius:5px;cursor:default}
+body.site-overlay-open #home-page{visibility:hidden}
+#page-find button{display:grid;place-items:center;flex:0 0 25px;width:25px;height:25px;padding:0;border-radius:3px;color:var(--palette-muted)}#page-find .icon{width:15px;height:15px}

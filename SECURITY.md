@@ -30,7 +30,7 @@ The packaged build defaults to `%APPDATA%/NocturneSecure`, separate from the sou
 ## Verification
 
 - `npm test`: URL handling, domain suffix boundaries, PSL classification, tracker exceptions, HTTP gate, cloud opt-in/cache/outage cases, filter-update failure, simulated scanner detection/error/mutation cases, existing encrypted-vault tests.
-- `node security-smoke.cjs`: real Electron request interception, harmless `.test` domain fixtures, redirect blocking, tracker request, HTTP confirmation, renderer sandbox/no privileged bridge, actual OS key encryption, mocked cloud-threat/outage responses, real Defender scan of harmless text, NTFS Internet Zone marking, and safe file opening (system opener stubbed).
+- `node tests/security-smoke.cjs`: real Electron request interception, harmless `.test` domain fixtures, redirect blocking, tracker request, HTTP confirmation, renderer sandbox/no privileged bridge, actual OS key encryption, mocked cloud-threat/outage responses, real Defender scan of harmless text, NTFS Internet Zone marking, and safe file opening (system opener stubbed).
 - `node scripts/verify-package.mjs`: packaged boot in an isolated profile, exact fuse values, a deliberately modified ASAR being rejected, and restoration of the original archive. No malware is used.
 - Existing smoke, feature and settings tests remain available. Tests use isolated profiles under `artifacts/`.
 
