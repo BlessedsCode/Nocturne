@@ -18,6 +18,7 @@ const {createScanner,markDownloaded}=require('./defender');
 const {SearchSuggestions,historySuggestions}=require('./suggestions');
 const {ExtensionsManager}=require('./extensions');
 const {AdBlock}=require('./adblock');
+const {attachYouTubeDiagnostics}=require('./youtube-diagnostics');
 const {SponsorBlock,videoID}=require('./sponsorblock');
 const {watchEdits,hasDiscardRisk,within}=require('./tab-safety');
 const {liveContents,requestTab}=require('./tab-contents');
@@ -290,6 +291,7 @@ function attachTabWebContents(t, url, nativeOptions) {
   const attachedView=t.view;
   const wc = t.view.webContents;
   wc.setAudioMuted(!!t.muted);
+  attachYouTubeDiagnostics(wc,app.getPath('userData'),()=>current()?.id===t.id);
   wc.once('destroyed',()=>{
     // window.close() from a native child must remove only that tab. Discard,
     // explicit tab closure and app shutdown have their own lifecycle handlers.
