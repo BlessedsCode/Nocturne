@@ -35,6 +35,23 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  await key('U',['control']);await page.waitForTimeout(200);assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().filter(window=>window.getParentWindow()).every(window=>window.webContents.getLastWebPreferences().sandbox)),true);await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().filter(window=>window.getParentWindow()).forEach(window=>window.close()));
  await key('J',['control']);await page.waitForSelector('#downloads-panel:not([hidden])');await rootKey('Escape');await page.locator('#downloads-panel').waitFor({state:'hidden'});
  await key('H',['control']);await page.waitForSelector('#history-section:not([hidden])');
+ await rootKey('Escape');
+ await app.evaluate(async ({webContents},id)=>{
+  global.__fullscreenCloseErrors=[];
+  process.on('uncaughtException',error=>global.__fullscreenCloseErrors.push(error.message));
+  await webContents.fromId(id).executeJavaScript('document.body.requestFullscreen()',true);
+ },wcId);
+ assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isFullScreen()),true);
+ await key('Tab',['control']);
+ await page.waitForFunction(()=>!document.querySelector('.tab.active').textContent.includes('Controls fixture'));
+ assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isFullScreen()),false);
+ await rootKey('Tab',['control','shift']);
+ await page.waitForFunction(()=>document.querySelector('.tab.active').textContent.includes('Controls fixture'));
+ await app.evaluate(({webContents},id)=>webContents.fromId(id).executeJavaScript('document.body.requestFullscreen()',true),wcId);
+ await key('W',['control']);
+ await page.waitForFunction(()=>document.querySelectorAll('.tab').length===1,null,{timeout:5000});
+ assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isFullScreen()),false);
+ assert.deepEqual(await app.evaluate(()=>global.__fullscreenCloseErrors),[]);
  assert.deepEqual(errors,[]);console.log('PASS: real F12 open/close, including DevTools focus; native page find; zoom; hard reload; new/switch/close/reopen tabs; real text/link/input/image context menus; inspect; PNG and HTML saving; inert sandboxed source viewer; downloads and history shortcuts');
  }catch(error){console.error('CHECK FAILED',error);throw error;}finally{await app.evaluate(({webContents})=>{for(const wc of webContents.getAllWebContents())if(wc.isDevToolsOpened())wc.closeDevTools();}).catch(()=>{});await app.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -134,6 +134,12 @@ function state(immediate=false) {
   }
 }
 function current() {return tabs.get(active);}
+function exitTabFullscreen(tab) {
+  if (!tab?.htmlFullScreen) return;
+  tab.htmlFullScreen = false;
+  liveContents(tab)?.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen()').catch(()=>{});
+  if (win && !win.isDestroyed() && win.isFullScreen()) win.setFullScreen(false);
+}
 function toggleTabMuted(id){const t=tabs.get(id);if(!t)return; t.muted=!t.muted;liveContents(t)?.setAudioMuted(t.muted);state();return {muted:t.muted};}
 async function requestOverlay(visible){
  const token=++overlaySequence;
@@ -201,7 +207,9 @@ async function runBrowserAction(action){
  if(['next-tab','previous-tab'].includes(action)||/^tab-[1-9]$/.test(action)){
   const ids=[...tabs.keys()],index=ids.indexOf(active);closePageFind(false);overlay=false;tell('close-panels');
   const prev=current();if(prev)prev.lastActiveAt=Date.now();
-  active=action==='next-tab'?ids[(index+1)%ids.length]:action==='previous-tab'?ids[(index-1+ids.length)%ids.length]:action==='tab-9'?ids.at(-1):ids[Math.min(Number(action.slice(4))-1,ids.length-1)];
+  const targetId=action==='next-tab'?ids[(index+1)%ids.length]:action==='previous-tab'?ids[(index-1+ids.length)%ids.length]:action==='tab-9'?ids.at(-1):ids[Math.min(Number(action.slice(4))-1,ids.length-1)];
+  if (targetId !== active) exitTabFullscreen(prev);
+  active=targetId;
   const nextTab=tabs.get(active);
   if(nextTab){
     nextTab.lastActiveAt=Date.now();
@@ -504,6 +512,7 @@ function newTab(url, options = {}) {
     scrollPosition:null,
     htmlFullScreen:false
   };
+  if (!inBackground) exitTabFullscreen(current());
   tabs.set(t.id,t); active=t.id;
   if(options.nativeOptions){
     t.url=url;t.title=/^https?:/.test(url)?new URL(url).hostname:'Окно сайта';t.loading=true;t.openerId=options.openerId;t.authPopup=!!options.authPopup;
@@ -540,7 +549,7 @@ function navigate(input) {
 }
 function finishCloseTab(id){
   const t=tabs.get(id);if(!t)return;
-  if(t.htmlFullScreen&&win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
+  exitTabFullscreen(t);
   closePageFind(false);
   closedTabs.push(t.url||'');
   if(closedTabs.length>20)closedTabs.shift();
@@ -699,7 +708,7 @@ app.whenReady().then(async()=>{
     for(const t of tabs.values()){
       if(t.htmlFullScreen){
         t.htmlFullScreen=false;
-        t.view?.webContents.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})');
+        liveContents(t)?.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen()').catch(()=>{});
       }
     }
     layout();
@@ -966,11 +975,7 @@ app.whenReady().then(async()=>{
       const prev=current();
       if(prev){
         prev.lastActiveAt=Date.now();
-        if(prev.htmlFullScreen&&prev.id!==value){
-          prev.htmlFullScreen=false;
-          prev.view?.webContents.executeJavaScript('if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})');
-          if(win&&!win.isDestroyed()&&win.isFullScreen())win.setFullScreen(false);
-        }
+        if (prev.id !== value) exitTabFullscreen(prev);
       }
       active=value;
       const target=tabs.get(value);
