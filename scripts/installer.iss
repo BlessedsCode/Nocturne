@@ -1,4 +1,4 @@
-#define AppVersion GetEnv('NOCTURNE_APP_VERSION')
+﻿#define AppVersion GetEnv('NOCTURNE_APP_VERSION')
 #define BuildDirectory GetEnv('NOCTURNE_BUILD_DIRECTORY')
 #define OutputDirectory GetEnv('NOCTURNE_INSTALLER_OUTPUT')
 
@@ -21,15 +21,15 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern dark includetitlebar hidebevels
 WizardSizePercent=135
-WizardBackColor=#151b16
+WizardBackColor=#101410
 WizardBackImageFile=..\assets\mont-saint-michel.png
-WizardBackImageOpacity=85
+WizardBackImageOpacity=34
 WizardImageFile=
-WizardSmallImageFile=
+WizardSmallImageFile=..\assets\icon.png
 DefaultDialogFontName=Segoe UI
 DisableWelcomePage=no
 DisableDirPage=no
-DisableReadyPage=yes
+DisableReadyPage=no
 UninstallDisplayName=Nocturne
 UninstallDisplayIcon={app}\Nocturne.exe
 CloseApplications=no
@@ -93,6 +93,8 @@ russian.SelectDirLabel3=Где поселится Nocturne?
 russian.SelectDirDesc=Выбери папку для браузера.
 russian.SelectTasksDesc=Последние штрихи.
 russian.SelectTasksLabel2=Как тебе будет удобнее открывать браузер?
+russian.ReadyLabel1=Всё готово к установке Nocturne.
+english.ReadyLabel1=Nocturne is ready to install.
 russian.InstallingLabel=Подготавливаем Nocturne. Осталось совсем немного.
 english.WelcomeLabel1=Welcome to Nocturne
 english.WelcomeLabel2=A quiet place for your internet.%n%nLet's install your browser and get it ready.%nChoose your theme, search engine and data import on first launch.
@@ -138,7 +140,8 @@ begin
   SignatureLabel := TNewStaticText.Create(WizardForm);
   SignatureLabel.Parent := WizardForm;
   SignatureLabel.Caption := 'N O C T U R N E   /   {#AppVersion}';
-  SignatureLabel.Font.Size := 8;
+  SignatureLabel.Font.Name := 'Segoe UI';
+  SignatureLabel.Font.Size := 9;
   SignatureLabel.SetBounds(ScaleX(20), WizardForm.NextButton.Top + ScaleY(7),
     ScaleX(230), ScaleY(20));
 end;

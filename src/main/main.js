@@ -32,6 +32,8 @@ const rendererDirectory=path.join(__dirname,'..','renderer');
 const preloadDirectory=path.join(__dirname,'..','preload');
 const shellURL=pathToFileURL(path.join(rendererDirectory,'index.html')).href;
 let win, active, overlay = false, nextId = 0, shuttingDown = false;
+let closeMotionEnabled = false;
+let windowCloseTimer;
 let profileRevealTimer, windowRevealTimer, memorySaverTimer, memorySaverRunning=false;
 let profileIntroduction=false, windowRevealed=false, windowRevealPending=false;
 let vault, downloads, profile, icons, security, combinedSearch;
@@ -64,7 +66,7 @@ const ownsProfile=app.requestSingleInstanceLock();
 if(!ownsProfile)app.quit();
 app.on('second-instance',(_event,argv)=>{pendingExternalURLs.push(...externalURLs(argv).slice(0,16-pendingExternalURLs.length));const end=argv.indexOf('--');if(argv.slice(1,end<0?undefined:end).includes('--default-browser-settings'))pendingDefaultSettings=true;openExternalIntents();if(win&&!win.isDestroyed()){if(win.isMinimized())win.restore();if(profileMode==='personal')tell('profile-enter');else if(!windowRevealed)revealMainWindow();else{win.show();win.focus();}}});
 function revealWindow({from=0,duration=900,animate=true}={}){
- if(!win||win.isDestroyed())return;
+ if(!win||win.isDestroyed()||windowCloseTimer||shuttingDown)return;
  clearInterval(windowRevealTimer);
  const shouldAnimate=animate&&profile?.preferences?.animations!==false;
  windowRevealed=true;
@@ -713,7 +715,25 @@ app.whenReady().then(async()=>{
     }
     layout();
   });
-  win.on('close',()=>{
+  win.on('close',event=>{
+    if (!shuttingDown && closeMotionEnabled && win.isVisible() && !win.isMinimized()) {
+      event.preventDefault();
+      if (windowCloseTimer) return;
+      clearInterval(windowRevealTimer);
+      const started = Date.now();
+      const opacity = win.getOpacity();
+      windowCloseTimer = setInterval(() => {
+        const progress = Math.min(1, (Date.now() - started) / 280);
+        win.setOpacity(opacity * (1 - progress * progress));
+        if (progress === 1) {
+          clearInterval(windowCloseTimer);
+          windowCloseTimer = undefined;
+          shuttingDown = true;
+          win.close();
+        }
+      }, 16);
+      return;
+    }
     shuttingDown=true;
     combinedSearch?.cancel();aiAssistant?.cancel();
     for(const child of win.getChildWindows())child.destroy();
@@ -722,6 +742,8 @@ app.whenReady().then(async()=>{
     icons.flush?.();
   });
   win.on('closed',()=>{
+    clearInterval(windowCloseTimer);
+    clearInterval(windowRevealTimer);
     clearInterval(profileRevealTimer);
     if(memorySaverTimer) clearInterval(memorySaverTimer);
     combinedSearch?.cancel();aiAssistant?.cancel();
@@ -1004,6 +1026,7 @@ app.whenReady().then(async()=>{
     if(action==='overlay-ready'){if(value===overlaySequence){overlay=true;layout();}return;}
     if(action==='minimize')win.minimize();
     if(action==='maximize')win.isMaximized()?win.unmaximize():win.maximize();
+    if(action==='window-motion'){closeMotionEnabled=value===true;return;}
     if(action==='quit')win.close();
     }catch(e){return {error:e.message||'Не удалось выполнить действие.'};}
   });
