@@ -37,3 +37,5 @@ body.no-motion *,body.no-motion *::before,body.no-motion *::after{animation:none
 .tab.drag-over-before{box-shadow:inset 3px 0 0 0 #a855f7}
 .tab.drag-over-after{box-shadow:inset -3px 0 0 0 #a855f7}
 
+
+.download-row progress[hidden],.download-row .download-scan[hidden]{display:none}.download-row small{font-variant-numeric:tabular-nums}

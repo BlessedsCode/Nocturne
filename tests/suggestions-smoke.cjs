@@ -24,8 +24,8 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  await page.locator('#address').click();await page.locator('#address').fill('Example');await page.waitForSelector('.suggestion-row');await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
  await page.waitForFunction(()=>document.querySelector('.tab.active .tab-title').textContent.includes('Example Domain'));
  await page.locator('#address').click();await page.locator('#address').fill('mont');await page.waitForFunction(()=>document.querySelector('#search-suggestions').textContent.includes('mont castle'));assert.equal(await app.evaluate(({webContents})=>webContents.getAllWebContents().find(w=>w.getURL()==='https://example.com/').getURL()),'https://example.com/');
- assert.equal(await page.locator('#suggestion-backdrop').isVisible(),true);
- await page.keyboard.press('Escape');assert.equal(await page.locator('#suggestion-backdrop').isVisible(),false);
+ assert.equal(await page.locator('#site-overlay-background').isVisible(),true);
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#site-overlay-background').isVisible(),false);
  await page.locator('#settings-button').click();await page.locator('[data-section=general]').click();await page.locator('#online-suggestions').uncheck();await page.locator('#close-settings').click();await page.locator('#settings').waitFor({state:'hidden'});
  await page.locator('#address').fill('offline test');await page.locator('#address').click();const count=await app.evaluate(()=>global.__suggestRequests.length);await page.waitForTimeout(450);assert.equal(await app.evaluate(()=>global.__suggestRequests.length),count);assert.match(await page.locator('#search-suggestions').textContent(),/выключены/);
  assert.deepEqual(errors,[]);console.log('PASS: recent/frequent sites; no requests on focus; online completions; upward positioning; keyboard navigation; stale response rejection; private URL suppression; real history navigation; address dropdown over a website; opt out');

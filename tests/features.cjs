@@ -54,8 +54,18 @@ const settle=page=>page.evaluate(()=>Promise.all(document.getAnimations().map(a=
   await page.locator('#address').fill(base);await page.locator('#address').press('Enter');await page.waitForFunction(()=>document.querySelector('.tab.active .tab-title').textContent.includes('Download test'));
   await app.evaluate(({session,webContents},info)=>{session.fromPartition('persist:nocturne').once('will-download',(_event,item)=>item.setSavePath(info.file));webContents.getAllWebContents().find(w=>w.getURL().startsWith(info.base)).downloadURL(info.base+'/download');},{base,file:path.join(profile,'nocturne-test.txt')});
   await page.locator('#downloads-button').click();await page.waitForSelector('.download-row progress');
+  await page.evaluate(()=>{
+   window.__downloadRow=document.querySelector('.download-row');
+   window.__downloadProgress=window.__downloadRow.querySelector('progress');
+   window.__downloadValue=window.__downloadProgress.value;
+   window.__pause=window.__downloadRow.querySelector('[title="Приостановить или продолжить"]');
+   window.__pause.focus();
+  });
+  await page.waitForFunction(()=>document.querySelector('.download-row progress').value>window.__downloadValue);
+  assert.equal(await page.evaluate(()=>window.__downloadRow===document.querySelector('.download-row')&&window.__downloadProgress===document.querySelector('.download-row progress')&&document.activeElement===window.__pause),true);
   await page.getByText('Пауза',{exact:true}).click();await page.waitForFunction(()=>document.querySelector('.download-row small').textContent.includes('На паузе'));
   await page.getByText('Продолжить',{exact:true}).click();await page.waitForFunction(()=>document.querySelector('.download-row small').textContent.includes('Готово'));
+  assert.match(await page.locator('.download-row small').textContent(),/1\.3 МБ \/ 1\.3 МБ/);
   assert.equal((await fs.stat(path.join(profile,'nocturne-test.txt'))).size,80*16384);
   await app.evaluate(({shell})=>{shell.openPath=async file=>{global.__opened=file;return '';};shell.showItemInFolder=file=>{global.__revealed=file;};});
   await page.getByText('Открыть ↗',{exact:true}).click();await page.getByText('В папке',{exact:true}).click();

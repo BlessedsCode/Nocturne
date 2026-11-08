@@ -99,7 +99,6 @@ function revealPersonalProfile(animate){
 const tabs = new Map();
 const closedTabs=[];let findTarget=null,findRequest=0,findText='';
 const devtoolsHooks=new WeakSet();
-let overlaySequence=0;
 let stateScheduled=false;
 function state(immediate=false) {
   if (!win || win.isDestroyed()) return;
@@ -143,19 +142,16 @@ function exitTabFullscreen(tab) {
   if (win && !win.isDestroyed() && win.isFullScreen()) win.setFullScreen(false);
 }
 function toggleTabMuted(id){const t=tabs.get(id);if(!t)return; t.muted=!t.muted;liveContents(t)?.setAudioMuted(t.muted);state();return {muted:t.muted};}
-async function requestOverlay(visible){
- const token=++overlaySequence;
- if(!visible){overlay=false;win.webContents.send('overlay-background',{token,clear:true});layout();return;}
- if(overlay){layout();return;}
- const tab=current(),wc=tab?.view?.webContents;
- // Hide the native page immediately. Capturing it for the translucent backdrop
- // can take a while on heavy sites; the panel must never open behind the page.
- overlay=true;layout();
- if(!wc||wc.isDestroyed()||tab.error||tab.security)return;
- wc.capturePage().then(image=>image.toDataURL()).then(image=>{
-   if(token!==overlaySequence||current()!==tab||win.isDestroyed()||!overlay)return;
-   win.webContents.send('overlay-background',{token,image,hasSite:true});
- }).catch(()=>{});
+function requestOverlay(visible){
+ if(!win||win.isDestroyed())return;
+ const tab=current(),wc=liveContents(tab);
+ if(overlay===visible&&visible)return;
+ const moveFocus=visible&&wc?.isFocused();
+ overlay=visible;
+ win.webContents.send('overlay-background',{hasSite:!!(visible&&wc&&!tab.error&&!tab.security)});
+ layout();
+ // The hidden child view must not retain keyboard input.
+ if(moveFocus)win.webContents.focus();
 }
 function pageContents(){const wc=current()?.view?.webContents;return wc&&!wc.isDestroyed()?wc:win.webContents;}
 function focusActiveTab(){const tab=current();const wc=!tab?.error&&!tab?.security?tab?.view?.webContents:null;(wc&&!wc.isDestroyed()?wc:win.webContents).focus();}
@@ -810,10 +806,6 @@ app.whenReady().then(async()=>{
     if(action==='security-check-runtime'){
       try{const response=await net.fetch('https://registry.npmjs.org/electron/latest',{signal:AbortSignal.timeout(10000),credentials:'omit'});if(!response.ok)throw new Error();const metadata=await response.json();if(!/^\d+\.\d+\.\d+$/.test(metadata.version))throw new Error();return {current:process.versions.electron,latest:metadata.version,updateAvailable:metadata.version!==process.versions.electron};}catch{return {error:'Не удалось проверить версию Electron.'};}
     }
-    if(action==='suggestion-backdrop'){
-      if(!wc||wc.isDestroyed()||overlay)return '';
-      try{return (await wc.capturePage()).toDataURL();}catch{return '';}
-    }
     if(action==='favicon-get')return {icon:await icons.get(value)};
     if(action==='settings-get')return {...profile.preferences,downloadDirectory:profile.preferences.downloadDirectory||app.getPath('downloads'),versions:{app:app.getVersion(),chromium:process.versions.chrome,electron:process.versions.electron}};
     if(action==='settings-update'){const updated=profile.update(value);sites.spellCheckerEnabled=updated.spellcheck;grants.clear();for(const t of tabs.values())liveContents(t)?.setZoomFactor(updated.zoom/100);if(Object.keys(value||{}).some(key=>['adBlock','sponsorBlock'].includes(key)||key.startsWith('ytContent')))refreshContentFilters();return updated;}
@@ -1023,7 +1015,6 @@ app.whenReady().then(async()=>{
     if(action==='forward'&&wc?.navigationHistory.canGoForward())wc.navigationHistory.goForward();
     if(action==='reload'&&current()?.url)navigate(current().url);
     if(action==='overlay')return await requestOverlay(!!value);
-    if(action==='overlay-ready'){if(value===overlaySequence){overlay=true;layout();}return;}
     if(action==='minimize')win.minimize();
     if(action==='maximize')win.isMaximized()?win.unmaximize():win.maximize();
     if(action==='window-motion'){closeMotionEnabled=value===true;return;}

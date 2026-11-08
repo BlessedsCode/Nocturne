@@ -57,7 +57,7 @@
   document.dispatchEvent(new Event('browser-panel-opening'));
   const token=++version,changed=query!==value;query=value;filter='all';input.value=value;
   if(changed){englishInput.value='';delete englishInput.dataset.manual;}
-  await closePanels(false);section.hidden=false;command('overlay',true);
+  await closePanels(false,false);section.hidden=false;command('overlay',true);
   current={id:0,query:value,sources:searchEngines.engines.map(engine=>({...engine,status:'waiting',results:[]})),results:[],done:false};draw();
   const result=await action('search-all',{query:value,english:english.checked,englishQuery:englishInput.dataset.manual==='true'?englishInput.value:'',force});
   if(token!==version)return;if(result?.error){info.textContent=result.error;return;}

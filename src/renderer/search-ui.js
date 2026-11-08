@@ -1,5 +1,4 @@
 (() => {
- const backdrop=document.createElement('img');backdrop.id='suggestion-backdrop';backdrop.alt='';backdrop.hidden=true;document.body.append(backdrop);
  const popup=document.createElement('section');popup.id='search-suggestions';popup.hidden=true;
  popup.setAttribute('aria-label','Подсказки');
  const list=document.createElement('div');list.id='search-suggestion-list';list.setAttribute('role','listbox');
@@ -31,16 +30,6 @@
   const result=await command('suggestion-history')||{history:[],online:true};
   if(token!==focusSerial||active!==input||document.activeElement!==input)return;
   context=result;
-  if(input.id==='address'&&panelIds.every(id=>$(id).hidden)){
-   const snapshot=await command('suggestion-backdrop');
-   if(token!==focusSerial||active!==input||document.activeElement!==input)return;
-   if(typeof snapshot==='string'&&snapshot.startsWith('data:image/png;')){
-    backdrop.src=snapshot;
-    try{await backdrop.decode();}catch{}
-    if(token!==focusSerial||active!==input)return;
-    backdrop.hidden=false;
-   }
-  }
   ready=true;update();
  }
  function update(){
@@ -113,7 +102,7 @@
  function close(){
   clearTimeout(timer);serial++;focusSerial++;
   if(active){active.setAttribute('aria-expanded','false');active.removeAttribute('aria-activedescendant');}
-  const wasOpen=!popup.hidden;popup.hidden=true;backdrop.hidden=true;backdrop.removeAttribute('src');selected=-1;items=[];active=null;ready=false;
+  const wasOpen=!popup.hidden;popup.hidden=true;selected=-1;items=[];active=null;ready=false;
   if(wasOpen&&panelIds.every(id=>$(id).hidden))command('overlay',false);
  }
  function place(){

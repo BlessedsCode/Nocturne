@@ -9,16 +9,35 @@ const assert=require('node:assert/strict'),path=require('node:path'),http=requir
  const page=await app.firstWindow();await page.waitForSelector('.tab');await page.evaluate(url=>window.browser.command('navigate',url),url);await page.waitForFunction(()=>document.querySelector('.tab.active').textContent.includes('Preserved website'));
  const id=await app.evaluate(({webContents},url)=>webContents.getAllWebContents().find(w=>w.getURL()===url).id,url);
  await app.evaluate(({webContents},id)=>webContents.fromId(id).executeJavaScript('document.getElementById("draft").value="unsaved text";scrollTo(0,420)'),id);
- await page.locator('#favorites-button').click();await page.waitForSelector('body.site-overlay-open');await page.waitForFunction(()=>document.getElementById('site-overlay-background').naturalWidth>0);
- assert.equal(await page.locator('#home-page').evaluate(node=>getComputedStyle(node).visibility),'hidden');await page.screenshot({path:'artifacts/site-with-favorites.png'});
- await page.locator('#close-favorites').click();await page.locator('#site-overlay-background').waitFor({state:'hidden'});
- let state=await app.evaluate(({webContents},id)=>webContents.fromId(id).executeJavaScript('({url:location.href,scroll:scrollY,draft:document.getElementById("draft").value})'),id);assert.deepEqual(state,{url,scroll:420,draft:'unsaved text'});
- // Heavy pages can take a while to capture. The panel must appear immediately,
- // not behind the still-visible native page.
- await app.evaluate(({BrowserWindow})=>{const view=BrowserWindow.getAllWindows()[0].contentView.children.find(v=>v.getVisible());const wc=view.webContents,original=wc.capturePage.bind(wc);wc.capturePage=async()=>{await new Promise(resolve=>setTimeout(resolve,1200));return original();};});
- await page.locator('#settings-button').click();assert.equal(await page.locator('#settings').isVisible(),true);assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].contentView.children.some(v=>v.getVisible())),false);await page.waitForSelector('body.site-overlay-open');await page.locator('#close-settings').click();await page.locator('#site-overlay-background').waitFor({state:'hidden'});
- await page.locator('#address').click();await page.waitForSelector('#search-suggestions:not([hidden])');await page.waitForSelector('body.site-overlay-open');await page.keyboard.press('Escape');await page.locator('#site-overlay-background').waitFor({state:'hidden'});
- state=await app.evaluate(({webContents},id)=>webContents.fromId(id).executeJavaScript('({url:location.href,scroll:scrollY,draft:document.getElementById("draft").value})'),id);assert.deepEqual(state,{url,scroll:420,draft:'unsaved text'});
- console.log('PASS: favorites, settings and address dropdown retain website backdrop; home hidden; exact same document, scroll position and unsaved input after closing overlays');
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await app.evaluate(({webContents},id)=>{
+  global.__captureCalls=0;
+  webContents.fromId(id).capturePage=()=>{global.__captureCalls++;return new Promise(()=>{});};
+ },id);
+ const nativeVisible=()=>app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows()[0].contentView.children.some(view=>view.webContents?.id===id&&view.getVisible()),id);
+ const covered=async selector=>{
+  await page.locator(selector).waitFor();
+  await page.locator('body.site-overlay-open').waitFor();
+  assert.equal(await nativeVisible(),false);
+  assert.equal(await page.locator('#home-page').evaluate(node=>getComputedStyle(node).visibility),'hidden');
+ };
+ await page.locator('#favorites-button').click();await covered('#favorites');
+ await page.locator('#downloads-button').click();await covered('#downloads-panel');
+ await page.locator('#ai-assistant-button').click();await covered('#ai-assistant');
+ await page.locator('#ai-prompt').fill('Unsaved question');
+ assert.equal(await page.locator('#ai-prompt').inputValue(),'Unsaved question');
+ await page.locator('#downloads-button').click();await covered('#downloads-panel');
+ await page.locator('#close-downloads').click();
+ await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);
+ await page.locator('#ai-assistant-button').click();await covered('#ai-assistant');
+ await page.keyboard.press('Escape');
+ await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);
+ await page.locator('#address').click();await covered('#search-suggestions');
+ await page.keyboard.press('Escape');
+ await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);
+ const state=await app.evaluate(({webContents},id)=>webContents.fromId(id).executeJavaScript('({url:location.href,scroll:scrollY,draft:document.getElementById("draft").value})'),id);
+ assert.deepEqual(state,{url,scroll:420,draft:'unsaved text'});
+ assert.equal(await app.evaluate(()=>global.__captureCalls),0);assert.deepEqual(errors,[]);
+ console.log('PASS: downloads, AI, favorites and address dropdown stay responsive without capture; switching and closing restore the same website and its form state');
  }finally{await app.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

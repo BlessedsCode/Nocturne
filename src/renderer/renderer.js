@@ -16,7 +16,7 @@ function saveIconCache(){try{localStorage.setItem('favicons',JSON.stringify(Obje
 const defaults={opacity:42,blur:18,brightness:85,saturation:110,texture:true,preset:'dark'};
 let settings={...defaults,...stored('glass',{})},preferences={interfaceColor:'moss',wallpaper:'mont',engine:'google',animations:true,showHomeLinks:true,showSidebarLinks:true,...stored('preferences',{})};
 const panelIds=['settings','favorites','downloads-panel','links-panel'];
-let downloadList=[],passwordList=[];
+let downloadList=[],passwordList=[],downloadRevision=0;
 let reloadUntil=0,reloadTimer;
 function updateReloadAnimation(loading){
   clearTimeout(reloadTimer);const el=$('reload');
@@ -60,14 +60,14 @@ function hidePanel(el,animate){
   const animation=el.animate([{opacity:1,transform:'translateX(0) scale(1)'},{opacity:0,transform:'translateX(-22px) scale(.985)'}],{duration:230,easing:'cubic-bezier(.4,0,1,1)'});el._animation=animation;
   return animation.finished.then(()=>{el.hidden=true;el._animation=null;}).catch(()=>{});
 }
-async function closePanels(animate=true){await Promise.all(panelIds.map(id=>hidePanel($(id),animate)));if(panelIds.every(id=>$(id).hidden)){command('overlay',false);$('settings-button').classList.remove('active');}}
+async function closePanels(animate=true,releaseOverlay=true){await Promise.all(panelIds.map(id=>hidePanel($(id),animate)));if(panelIds.every(id=>$(id).hidden)){if(releaseOverlay)command('overlay',false);$('settings-button').classList.remove('active');}}
 async function panel(id){
   document.dispatchEvent(new Event('browser-panel-opening'));
-  const el=$(id);if(!el.hidden)return closePanels();await closePanels(false);el._animation?.cancel();el.hidden=false;command('overlay',true);
+  const el=$(id);if(!el.hidden)return closePanels();await closePanels(false,false);el._animation?.cancel();el.hidden=false;command('overlay',true);
   $('settings-button').classList.toggle('active',id==='settings');
   if(preferences.animations&&!matchMedia('(prefers-reduced-motion: reduce)').matches)el.animate([{opacity:0,transform:'translateX(-26px) scale(.97)'},{opacity:1,transform:'translateX(0) scale(1)'}],{duration:440,easing:'cubic-bezier(.22,1,.36,1)'});
   if(id==='favorites')renderFavorites();if(id==='links-panel')renderLinksManager();
-  if(id==='downloads-panel'){const list=await action('downloads',{action:'list'});if(Array.isArray(list))downloadList=list;renderDownloads();}
+  if(id==='downloads-panel'){const revision=downloadRevision,list=await action('downloads',{action:'list'});if(revision===downloadRevision&&Array.isArray(list))downloadList=list;renderDownloads();}
   if(id==='settings'&&!$('passwords-section').hidden)loadPasswords();
   if(id==='settings'&&typeof loadBrowserSettings==='function')loadBrowserSettings();
 }
@@ -211,7 +211,7 @@ function render(s){
   if(iconsChanged){saveIconCache();renderQuickLinks();}
   if(changed){localStorage.setItem('favorites',JSON.stringify(saved));if(!$('favorites').hidden)renderFavorites();}
 }
-api?.onState(render);api?.onFocusAddress(()=>{$('address').focus();$('address').select();});api?.onDownloads(list=>{downloadList=list;renderDownloads();});
+api?.onState(render);api?.onFocusAddress(()=>{$('address').focus();$('address').select();});api?.onDownloads(list=>{downloadRevision++;downloadList=list;renderDownloads();});
 api?.onOpenDownloads(()=>panel('downloads-panel'));
 $('address-form').onsubmit=e=>{e.preventDefault();const value=$('address').value;$('address').blur();go(value);};
 $('search-form').onsubmit=e=>{e.preventDefault();go($('search').value);};
@@ -287,17 +287,48 @@ function renderPasswords(){
   }
 }
 function size(bytes){return bytes<1024?bytes+' Б':bytes>=1048576?(bytes/1048576).toFixed(1)+' МБ':(bytes/1024).toFixed(0)+' КБ';}
+const downloadRows=new Map();
 function renderDownloads(){
   const active=downloadList.filter(d=>d.active).length;$('download-count').hidden=!active;$('download-count').textContent=active;
-  $('downloads-list').replaceChildren();if(!downloadList.length)$('downloads-list').append(text('p','Загрузок пока нет.','empty-state'));
-  for(const d of downloadList){const row=document.createElement('article');row.className='download-row';const title=text('strong',d.name);title.title=d.path||d.name;row.append(title);
-    const status=({completed:'Готово',cancelled:'Отменено',interrupted:'Прервано'})[d.status]||(d.checking?'Проверка источника':d.paused?'На паузе':'Загружается');row.append(text('small',status+' · '+size(d.received)+(d.total?' / '+size(d.total):'')));
-    if(d.scan?.message){const scan=text('p',d.scan.message,'download-scan');scan.dataset.state=d.scan.state;row.append(scan);}
-    if(d.active){const progress=document.createElement('progress');progress.max=d.total||1;if(d.total)progress.value=d.received;row.append(progress);}
-    const controls=document.createElement('div');controls.className='row-actions';const act=name=>action('downloads',{action:name,id:d.id});
-    if(d.active){if(!d.checking)controls.append(button(d.paused||d.status==='interrupted'?'Продолжить':'Пауза','Приостановить или продолжить',()=>act('pause')));controls.append(button('Отменить','Отменить загрузку',()=>act('cancel')));}
-    if(d.status==='completed'){const open=button('Открыть ↗','Открыть файл',()=>act('open'));open.disabled=['scanning','blocked','waiting'].includes(d.scan?.state);controls.append(open,button('В папке','Показать файл в папке',()=>act('reveal')),button('Проверить','Проверить файл Defender',()=>act('scan')));}
-    if(!d.active)controls.append(button('×','Убрать из списка, сохранив файл',()=>act('remove')));row.append(controls);$('downloads-list').append(row);
+  const list=$('downloads-list'),ids=new Set(downloadList.map(d=>d.id));
+  for(const [id,entry] of downloadRows)if(!ids.has(id)){entry.row.remove();downloadRows.delete(id);}
+  if(!ids.size){if(!list.firstChild)list.append(text('p','Загрузок пока нет.','empty-state'));return;}
+  list.querySelector('.empty-state')?.remove();
+  let position=list.firstElementChild;
+  for(const d of downloadList){
+    let entry=downloadRows.get(d.id);
+    if(!entry){
+      const row=document.createElement('article');row.className='download-row';row.dataset.downloadId=d.id;
+      const title=text('strong',d.name),label=text('small',''),scan=text('p','','download-scan');
+      const progress=document.createElement('progress');progress.setAttribute('aria-label','Прогресс загрузки: '+d.name);
+      const controls=document.createElement('div');controls.className='row-actions';
+      row.append(title,label,scan,progress,controls);
+      entry={row,title,label,scan,progress,controls,signature:null};downloadRows.set(d.id,entry);
+    }
+    const {row,title,label,scan,progress,controls}=entry;
+    if(row!==position)list.insertBefore(row,position);position=row.nextElementSibling;
+    title.title=d.path||d.name;
+    const status=d.checking?'Проверка источника':({completed:'Готово',cancelled:'Отменено',interrupted:'Прервано'})[d.status]||(d.paused?'На паузе':'Загружается');
+    const received=Math.max(0,d.received||0),total=d.total>0?Math.max(d.total,received):0;
+    const labelText=status+' · '+size(received)+(total?' / '+size(total):'');
+    if(label.textContent!==labelText)label.textContent=labelText;
+    const scanText=d.active?'':d.scan?.message||'';
+    scan.hidden=!scanText;if(scan.textContent!==scanText)scan.textContent=scanText;
+    scan.dataset.state=d.scan?.state||'';
+    progress.hidden=!d.active;
+    if(total){progress.max=total;progress.value=received;}else progress.removeAttribute('value');
+    const resume=d.paused||d.status==='interrupted',blocked=['scanning','blocked','waiting'].includes(d.scan?.state);
+    const signature=[d.active,d.checking,resume,d.status,d.active?'':d.scan?.state].join('|');
+    if(entry.signature===signature)continue;
+    entry.signature=signature;
+    const act=name=>action('downloads',{action:name,id:d.id});
+    const focused=document.activeElement?.title;
+    const keepFocus=controls.contains(document.activeElement);
+    controls.replaceChildren();
+    if(d.active){if(!d.checking)controls.append(button(resume?'Продолжить':'Пауза','Приостановить или продолжить',()=>act('pause')));controls.append(button('Отменить','Отменить загрузку',()=>act('cancel')));}
+    if(d.status==='completed'){const open=button('Открыть ↗','Открыть файл',()=>act('open'));open.disabled=blocked;const check=button('Проверить','Проверить файл Defender',()=>act('scan'));check.disabled=['scanning','waiting'].includes(d.scan?.state);controls.append(open,button('В папке','Показать файл в папке',()=>act('reveal')),check);}
+    if(!d.active)controls.append(button('×','Убрать из списка, сохранив файл',()=>act('remove')));
+    if(keepFocus)[...controls.children].find(node=>node.title===focused)?.focus({preventScroll:true});
   }
 }
 $('downloads-folder').onclick=()=>action('downloads',{action:'folder'});

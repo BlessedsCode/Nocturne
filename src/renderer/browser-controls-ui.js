@@ -1,13 +1,7 @@
 (() => {
- const background=document.createElement('img');background.id='site-overlay-background';background.alt='';background.hidden=true;document.body.append(background);
- let backgroundToken=0;
- window.browser.onOverlayBackground(async data=>{
-  backgroundToken=data.token;
-  if(data.clear){background.hidden=true;background.removeAttribute('src');document.body.classList.remove('site-overlay-open');return;}
-  if(data.image){background.src=data.image;try{await background.decode();}catch{}}
-  if(backgroundToken!==data.token)return;
-  background.hidden=false;document.body.classList.add('site-overlay-open');
-  command('overlay-ready',data.token);
+ const background=document.createElement('div');background.id='site-overlay-background';background.hidden=true;document.body.append(background);
+ window.browser.onOverlayBackground(({hasSite})=>{
+  background.hidden=!hasSite;document.body.classList.toggle('site-overlay-open',hasSite);
  });
  background.addEventListener('pointerdown',()=>closePanels());
  const bar=document.createElement('form');bar.id='page-find';bar.hidden=true;bar.setAttribute('aria-label','Поиск на странице');

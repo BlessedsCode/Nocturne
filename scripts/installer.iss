@@ -20,11 +20,10 @@ SetupIconFile=..\assets\icon.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern dark includetitlebar hidebevels
-WizardSizePercent=135
-WizardBackColor=#101410
-WizardBackImageFile=..\assets\mont-saint-michel.png
-WizardBackImageOpacity=34
-WizardImageFile=
+WizardSizePercent=128
+WizardBackColor=#141C18
+WizardImageFile=..\assets\installer-panel.png
+WizardImageStretch=yes
 WizardSmallImageFile=..\assets\icon.png
 DefaultDialogFontName=Segoe UI
 DisableWelcomePage=no
@@ -75,17 +74,21 @@ Filename: "{app}\Nocturne.exe"; Parameters: "--default-browser-settings"; Descri
 ; User profiles are deliberately outside {app}; uninstall never removes them.
 
 [CustomMessages]
+russian.SetupKicker=УСТАНОВКА  /  WINDOWS X64
+russian.FinishKicker=УСТАНОВКА ЗАВЕРШЕНА
+english.SetupKicker=SETUP  /  WINDOWS X64
+english.FinishKicker=SETUP COMPLETE
 russian.DesktopShortcut=Создать ярлык на рабочем столе
 russian.ShortcutGroup=Ярлыки:
 russian.LaunchBrowser=Открыть Nocturne
-russian.ChooseDefaultBrowser=Выбрать Nocturne браузером по умолчанию в Windows
+russian.ChooseDefaultBrowser=Настроить браузер по умолчанию
 english.DesktopShortcut=Create a desktop shortcut
 english.ShortcutGroup=Shortcuts:
 english.LaunchBrowser=Open Nocturne
-english.ChooseDefaultBrowser=Choose Nocturne as your default browser in Windows
+english.ChooseDefaultBrowser=Set up the default browser
 
 [Messages]
-russian.WelcomeLabel1=Добро пожаловать%nв Nocturne
+russian.WelcomeLabel1=Добро пожаловать в Nocturne
 russian.WelcomeLabel2=Тихое место для твоего интернета.%n%nУстановим браузер и подготовим всё к первому запуску.%nТему, поиск и перенос данных можно настроить внутри.
 russian.FinishedHeadingLabel=Nocturne готов.
 russian.FinishedLabel=Браузер установлен.%n%nВыбери свою тему, настрой поиск и перенеси нужное из других браузеров при первом запуске.
@@ -96,7 +99,7 @@ russian.SelectTasksLabel2=Как тебе будет удобнее открыв
 russian.ReadyLabel1=Всё готово к установке Nocturne.
 english.ReadyLabel1=Nocturne is ready to install.
 russian.InstallingLabel=Подготавливаем Nocturne. Осталось совсем немного.
-english.WelcomeLabel1=Welcome to Nocturne
+english.WelcomeLabel1=Welcome to%nNocturne
 english.WelcomeLabel2=A quiet place for your internet.%n%nLet's install your browser and get it ready.%nChoose your theme, search engine and data import on first launch.
 english.FinishedHeadingLabel=Nocturne is ready.
 english.FinishedLabel=Your browser is installed.%n%nChoose your theme, set up search and bring your data from other browsers on first launch.
@@ -108,29 +111,41 @@ english.InstallingLabel=Preparing Nocturne. Just a moment.
 
 [Code]
 var
-  SignatureLabel: TNewStaticText;
+  SignatureLabel, WelcomeKicker, FinishKicker: TNewStaticText;
+  ContentLeft, ContentWidth: Integer;
+
+function MakeKicker(Page: TWinControl; Top: Integer; Caption: String): TNewStaticText;
+begin
+  Result := TNewStaticText.Create(WizardForm);
+  Result.Parent := Page;
+  Result.Caption := Caption;
+  Result.Font.Name := 'Segoe UI Semibold';
+  Result.Font.Size := 9;
+  Result.Font.Color := $00A7DBC1;
+  Result.SetBounds(ContentLeft, ScaleY(Top), ContentWidth, ScaleY(18));
+end;
 
 procedure InitializeWizard;
 begin
+  ContentLeft := WizardForm.WizardBitmapImage.Left + WizardForm.WizardBitmapImage.Width + ScaleX(24);
+  ContentWidth := WizardForm.WelcomePage.Width - ContentLeft - ScaleX(24);
+  WelcomeKicker := MakeKicker(WizardForm.WelcomePage, 28, CustomMessage('SetupKicker'));
+  FinishKicker := MakeKicker(WizardForm.FinishedPage, 28, CustomMessage('FinishKicker'));
   WizardForm.WelcomeLabel1.Font.Name := 'Georgia';
-  WizardForm.WelcomeLabel1.Font.Size := 30;
+  WizardForm.WelcomeLabel1.Font.Size := 27;
   WizardForm.WelcomeLabel1.Font.Style := [];
-  WizardForm.WelcomeLabel1.SetBounds(ScaleX(28), ScaleY(36),
-    WizardForm.WelcomePage.Width - ScaleX(56), ScaleY(100));
-  WizardForm.WelcomeLabel2.SetBounds(ScaleX(30), ScaleY(155),
-    WizardForm.WelcomePage.Width - ScaleX(60), ScaleY(140));
+  WizardForm.WelcomeLabel1.SetBounds(ContentLeft, ScaleY(58), ContentWidth, ScaleY(105));
+  WizardForm.WelcomeLabel2.SetBounds(ContentLeft, ScaleY(174), ContentWidth, ScaleY(140));
   WizardForm.WelcomeLabel2.Font.Size := 11;
   WizardForm.FinishedHeadingLabel.Font.Name := 'Georgia';
-  WizardForm.FinishedHeadingLabel.Font.Size := 28;
+  WizardForm.FinishedHeadingLabel.Font.Size := 27;
   WizardForm.FinishedHeadingLabel.Font.Style := [];
-  WizardForm.FinishedHeadingLabel.SetBounds(ScaleX(28), ScaleY(36),
-    WizardForm.FinishedPage.Width - ScaleX(56), ScaleY(70));
-  WizardForm.FinishedLabel.SetBounds(ScaleX(30), ScaleY(132),
-    WizardForm.FinishedPage.Width - ScaleX(60), ScaleY(110));
+  WizardForm.FinishedHeadingLabel.SetBounds(ContentLeft, ScaleY(58), ContentWidth, ScaleY(100));
+  WizardForm.FinishedLabel.SetBounds(ContentLeft, ScaleY(144), ContentWidth, ScaleY(105));
   WizardForm.FinishedLabel.Font.Size := 11;
-  WizardForm.RunList.Left := ScaleX(30);
+  WizardForm.RunList.Left := ContentLeft;
   WizardForm.RunList.Top := ScaleY(265);
-  WizardForm.RunList.Width := WizardForm.FinishedPage.Width - ScaleX(60);
+  WizardForm.RunList.Width := ContentWidth;
   WizardForm.RunList.Height := ScaleY(65);
   WizardForm.PageNameLabel.Font.Name := 'Georgia';
   WizardForm.PageNameLabel.Font.Size := 14;

@@ -12,7 +12,9 @@ function setupDownloads({session,app,shell,notify,getWindow,getPreferences=()=>(
   const scans=new Map();
   const snapshot=()=>downloads.map(({item,...d})=>d);
   function save(){fs.mkdirSync(path.dirname(historyFile),{recursive:true});fs.writeFileSync(historyFile,JSON.stringify(snapshot()));}
-  function publish(){notify(snapshot());}
+  let progressTimer;
+  function publish(){clearTimeout(progressTimer);progressTimer=null;notify(snapshot());}
+  function publishProgress(){if(!progressTimer)progressTimer=setTimeout(publish,100);}
   async function scan(d){
     if(scans.has(d.id))return scans.get(d.id);
     d.scan={state:'scanning',message:'Проверка Microsoft Defender…'};publish();
@@ -23,7 +25,7 @@ function setupDownloads({session,app,shell,notify,getWindow,getPreferences=()=>(
     const source=item.getURL();
     const d={id,name:item.getFilename(),received:0,total:item.getTotalBytes(),status:'progressing',active:true,paused:false,path:'',started:Date.now(),scan:{state:'waiting',message:'Ожидание загрузки'}};
     // Chromium shows the native Save As dialog; no overwrite or execution without user action.
-    downloads.unshift(d);live.set(id,item);publish();
+    downloads.unshift(d);live.set(id,item);
     const preferences=getPreferences();
     if(!preferences.askDownload){
       const directory=preferences.downloadDirectory||app.getPath('downloads');fs.mkdirSync(directory,{recursive:true});
@@ -31,19 +33,33 @@ function setupDownloads({session,app,shell,notify,getWindow,getPreferences=()=>(
       const used=new Set(downloads.map(x=>x.path));while(fs.existsSync(target)||used.has(target))target=path.join(directory,parsed.name+' ('+counter+++')'+parsed.ext);
       d.path=target;item.setSavePath(target);
     }
-    item.on('updated',(_event,status)=>{d.status=status;d.paused=item.isPaused();d.received=item.getReceivedBytes();d.total=item.getTotalBytes();d.path=item.getSavePath();publish();});
+    function updateBytes(){
+      d.received=Math.max(0,item.getReceivedBytes());
+      const total=item.getTotalBytes();
+      d.total=total>0?Math.max(total,d.received):0;
+      d.path=item.getSavePath();
+    }
+    item.on('updated',(_event,status)=>{
+      const changed=d.status!==status||d.paused!==item.isPaused();
+      d.status=status;d.paused=item.isPaused();updateBytes();
+      if(changed)publish();else publishProgress();
+    });
     item.once('done',async(_event,status)=>{
-      d.status=status;d.active=false;d.path=item.getSavePath();d.received=item.getReceivedBytes();live.delete(id);
+      d.status=status;d.active=false;d.paused=false;d.checking=false;updateBytes();live.delete(id);
       if(status==='completed'){
+        const shouldScan=getPreferences().scanDownloads;
+        d.scan={state:'waiting',message:'Подготавливаем файл…'};
+        publish();
         d.zoneMarked=await markDownloaded(d.path,source);
-        if(getPreferences().scanDownloads){await scan(d);}else d.scan={state:'unchecked',message:'Проверка файлов выключена.'};
+        if(shouldScan)await scan(d);else d.scan={state:'unchecked',message:'Проверка файлов выключена.'};
       }else d.scan={state:'unchecked',message:d.blockReason||'Файл не загружен.'};
       save();publish();
     });
     if(security){
       item.pause();d.checking=true;d.paused=true;
-      (async()=>{let blocked=null;for(const url of item.getURLChain()){blocked=await security.check(url,{main:true,cloud:true});if(blocked)break;}if(item.isDestroyed?.())return;d.checking=false;if(blocked){d.blockReason=blocked.message;security.record(source,blocked.kind);item.cancel();}else{item.resume();d.paused=false;publish();}})().catch(()=>{d.blockReason='Не удалось проверить источник загрузки.';item.cancel();});
+      (async()=>{let blocked=null;for(const url of item.getURLChain()){blocked=await security.check(url,{main:true,cloud:true});if(blocked)break;}if(!live.has(id)||item.isDestroyed?.())return;d.checking=false;if(blocked){d.blockReason=blocked.message;security.record(source,blocked.kind);item.cancel();}else{item.resume();d.paused=false;publish();}})().catch(()=>{if(!live.has(id))return;d.blockReason='Не удалось проверить источник загрузки.';item.cancel();});
     }
+    publish();
   });
   app.on('before-quit',save);
   async function command(action,id){
@@ -55,8 +71,9 @@ function setupDownloads({session,app,shell,notify,getWindow,getPreferences=()=>(
     if(action==='cancel'&&item)item.cancel();
     if(action==='remove'&&!item){downloads=downloads.filter(x=>x.id!==id);save();publish();}
     if(action==='reveal'&&d.path&&fs.existsSync(d.path))shell.showItemInFolder(d.path);
-    if(action==='scan'&&d.status==='completed')return scan(d);
+    if(action==='scan'&&d.status==='completed'&&d.scan?.state!=='waiting')return scan(d);
     if(action==='open'){
+      if(d.scan?.state==='waiting')throw new Error('Файл ещё подготавливается.');
       if(d.status!=='completed'||!d.path||!fs.existsSync(d.path))throw new Error('Файл ещё не загружен или был перемещён.');
       const {dialog}=require('electron');
       if(getPreferences().scanDownloads){
