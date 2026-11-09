@@ -39,3 +39,5 @@ body.no-motion *,body.no-motion *::before,body.no-motion *::after{animation:none
 
 
 .download-row progress[hidden],.download-row .download-scan[hidden]{display:none}.download-row small{font-variant-numeric:tabular-nums}
+
+#downloads-panel{backdrop-filter:none}

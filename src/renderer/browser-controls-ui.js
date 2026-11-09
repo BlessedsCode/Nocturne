@@ -1,7 +1,7 @@
 (() => {
  const background=document.createElement('div');background.id='site-overlay-background';background.hidden=true;document.body.append(background);
- window.browser.onOverlayBackground(({hasSite})=>{
-  background.hidden=!hasSite;document.body.classList.toggle('site-overlay-open',hasSite);
+ window.browser.onOverlayBackground(({hasSite,covered})=>{
+  background.hidden=!covered;document.body.classList.toggle('site-overlay-open',hasSite);
  });
  background.addEventListener('pointerdown',()=>closePanels());
  const bar=document.createElement('form');bar.id='page-find';bar.hidden=true;bar.setAttribute('aria-label','Поиск на странице');

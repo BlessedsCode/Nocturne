@@ -21,17 +21,60 @@ const assert=require('node:assert/strict'),path=require('node:path'),http=requir
   assert.equal(await nativeVisible(),false);
   assert.equal(await page.locator('#home-page').evaluate(node=>getComputedStyle(node).visibility),'hidden');
  };
+ const bounds=()=>app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows()[0].contentView.children.find(view=>view.webContents?.id===id).getBounds(),id);
+ await page.evaluate(()=>window.browser.command('overlay',false));
+ const original=await bounds();
+ const runOnSite=code=>app.evaluate(({webContents},{id,code})=>webContents.fromId(id).executeJavaScript(code),{id,code});
+ await runOnSite(`(async()=>{
+  const canvas=document.createElement('canvas');
+  canvas.width=canvas.height=32;
+  const ctx=canvas.getContext('2d');
+  const video=document.createElement('video');
+  video.id='test-video';video.muted=true;video.style.position='fixed';
+  document.body.prepend(video);
+  video.srcObject=canvas.captureStream(15);
+  setInterval(()=>{ctx.fillStyle=ctx.fillStyle==='#000000'?'white':'black';ctx.fillRect(0,0,32,32);},60);
+  await video.play();
+ })()`);
+ const docked=async (selector,side)=>{
+  const panel=page.locator(selector);
+  await panel.waitFor();
+  await page.waitForFunction(()=>document.body.classList.contains('site-overlay-open'));
+  assert.equal(await nativeVisible(),true);
+  assert.equal(await page.locator('#site-overlay-background').isVisible(),false);
+  const box=await panel.boundingBox();
+  let site;
+  for(let attempt=0;attempt<30;attempt++){
+   site=await bounds();
+   if(site.width<original.width&&(side==='left'?site.x>=box.x+box.width:site.x+site.width<=box.x))break;
+   await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert(site.width<original.width, JSON.stringify({site,original,box}));
+  assert(side==='left'?site.x>=box.x+box.width:site.x+site.width<=box.x);
+  await runOnSite(`new Promise((resolve,reject)=>{
+   const video=document.getElementById('test-video');
+   const start=video.currentTime;
+   const deadline=setTimeout(()=>reject(new Error('Video stopped advancing with a panel open')),2000);
+   function check(){
+    if(video.currentTime>start&&!video.paused){clearTimeout(deadline);resolve(true);}
+    else requestAnimationFrame(check);
+   }
+   check();
+  })`);
+ };
  await page.locator('#favorites-button').click();await covered('#favorites');
- await page.locator('#downloads-button').click();await covered('#downloads-panel');
- await page.locator('#ai-assistant-button').click();await covered('#ai-assistant');
+ await page.locator('#downloads-button').click();await docked('#downloads-panel','left');
+ await page.locator('#ai-assistant-button').click();await docked('#ai-assistant','right');
  await page.locator('#ai-prompt').fill('Unsaved question');
  assert.equal(await page.locator('#ai-prompt').inputValue(),'Unsaved question');
- await page.locator('#downloads-button').click();await covered('#downloads-panel');
+ await page.locator('#downloads-button').click();await docked('#downloads-panel','left');
  await page.locator('#close-downloads').click();
- await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);
- await page.locator('#ai-assistant-button').click();await covered('#ai-assistant');
+ await page.waitForFunction(()=>!document.body.classList.contains('site-overlay-open'));
+ assert.deepEqual(await bounds(),original);
+ await page.locator('#ai-assistant-button').click();await docked('#ai-assistant','right');
  await page.keyboard.press('Escape');
- await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);
+ await page.waitForFunction(()=>!document.body.classList.contains('site-overlay-open'));
+ assert.deepEqual(await bounds(),original);
  await page.locator('#address').click();await covered('#search-suggestions');
  await page.keyboard.press('Escape');
  await page.locator('#site-overlay-background').waitFor({state:'hidden'});assert.equal(await nativeVisible(),true);

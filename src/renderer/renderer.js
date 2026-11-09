@@ -54,18 +54,20 @@ async function go(value){
   if(value&&!host.test(value)&&!/^\w[\w+.-]*:/i.test(value))value=searchEngines.searchURL(preferences.engine,value);
   await action('navigate',value);
 }
+const dockedPanels=new Set(['downloads-panel','ai-assistant']);
 function hidePanel(el,animate){
   el._animation?.cancel();if(el.hidden)return Promise.resolve();
   if(!animate||!preferences.animations||matchMedia('(prefers-reduced-motion: reduce)').matches){el.hidden=true;return Promise.resolve();}
-  const animation=el.animate([{opacity:1,transform:'translateX(0) scale(1)'},{opacity:0,transform:'translateX(-22px) scale(.985)'}],{duration:230,easing:'cubic-bezier(.4,0,1,1)'});el._animation=animation;
+  const frames=dockedPanels.has(el.id)?[{opacity:1},{opacity:0}]:[{opacity:1,transform:'translateX(0) scale(1)'},{opacity:0,transform:'translateX(-22px) scale(.985)'}];
+  const animation=el.animate(frames,{duration:230,easing:'cubic-bezier(.4,0,1,1)'});el._animation=animation;
   return animation.finished.then(()=>{el.hidden=true;el._animation=null;}).catch(()=>{});
 }
 async function closePanels(animate=true,releaseOverlay=true){await Promise.all(panelIds.map(id=>hidePanel($(id),animate)));if(panelIds.every(id=>$(id).hidden)){if(releaseOverlay)command('overlay',false);$('settings-button').classList.remove('active');}}
 async function panel(id){
   document.dispatchEvent(new Event('browser-panel-opening'));
-  const el=$(id);if(!el.hidden)return closePanels();await closePanels(false,false);el._animation?.cancel();el.hidden=false;command('overlay',true);
+  const el=$(id);if(!el.hidden)return closePanels();await closePanels(false,false);el._animation?.cancel();el.hidden=false;const docked=dockedPanels.has(id);await command('overlay',docked?id:true);
   $('settings-button').classList.toggle('active',id==='settings');
-  if(preferences.animations&&!matchMedia('(prefers-reduced-motion: reduce)').matches)el.animate([{opacity:0,transform:'translateX(-26px) scale(.97)'},{opacity:1,transform:'translateX(0) scale(1)'}],{duration:440,easing:'cubic-bezier(.22,1,.36,1)'});
+  if(preferences.animations&&!matchMedia('(prefers-reduced-motion: reduce)').matches)el.animate(docked?[{opacity:0},{opacity:1}]:[{opacity:0,transform:'translateX(-26px) scale(.97)'},{opacity:1,transform:'translateX(0) scale(1)'}],{duration:440,easing:'cubic-bezier(.22,1,.36,1)'});
   if(id==='favorites')renderFavorites();if(id==='links-panel')renderLinksManager();
   if(id==='downloads-panel'){const revision=downloadRevision,list=await action('downloads',{action:'list'});if(revision===downloadRevision&&Array.isArray(list))downloadList=list;renderDownloads();}
   if(id==='settings'&&!$('passwords-section').hidden)loadPasswords();
@@ -226,7 +228,7 @@ $('retry').onclick=async()=>{await closePanels();command('reload');};$('error-ho
 $('bookmark').onclick=()=>{const t=state.tabs.find(t=>t.id===state.active);if(!t?.url)return toast('Сначала открой сайт');const index=saved.findIndex(b=>b.url===t.url);if(index>=0)saved.splice(index,1);else saved.push({title:t.title,url:t.url,favicon:t.favicon||''});localStorage.setItem('favorites',JSON.stringify(saved));render(state);toast(index>=0?'Удалено из избранного':'Добавлено в избранное');};
 function renderFavorites(){
   $('favorites-list').replaceChildren();if(!saved.length)$('favorites-list').append(text('p','Сохраняй любимые сайты кнопкой ☆ у адресной строки.'));
-  for(const b of saved){const row=document.createElement('div');row.className='saved-row';const open=button('',b.url,()=>go(b.url),'favorite-open');open.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',b.url);}};open.oncontextmenu=e=>{e.preventDefault();navigator.clipboard.writeText(b.url);toast('Адрес ссылки скопирован');};const info=document.createElement('span');info.className='favorite-info';let host=b.url;try{host=new URL(b.url).hostname;}catch{}info.append(text('strong',b.title||host),text('small',host));open.append(favicon(b.favicon,b.url,b.title||host),info,text('span','↗','favorite-arrow'));
+  for(const b of saved){const row=document.createElement('div');row.className='saved-row';const open=button('',b.url,()=>go(b.url),'favorite-open');open.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-background-tab',b.url);}};open.oncontextmenu=e=>{e.preventDefault();navigator.clipboard.writeText(b.url);toast('Адрес ссылки скопирован');};const info=document.createElement('span');info.className='favorite-info';let host=b.url;try{host=new URL(b.url).hostname;}catch{}info.append(text('strong',b.title||host),text('small',host));open.append(favicon(b.favicon,b.url,b.title||host),info,text('span','↗','favorite-arrow'));
     row.append(open,button('×','Удалить',()=>{saved=saved.filter(x=>x!==b);localStorage.setItem('favorites',JSON.stringify(saved));renderFavorites();render(state);}));$('favorites-list').append(row);
   }
 }
@@ -238,8 +240,8 @@ api?.onLinkAction(async({id,kind})=>{const link=links.find(l=>l.id===id);if(!lin
 function renderQuickLinks(){
   $('quick-links').replaceChildren();let rail=$('rail-links');if(!rail){rail=document.createElement('div');rail.id='rail-links';document.querySelectorAll('.rail>[data-url]').forEach(el=>el.remove());document.querySelector('.rail-line').after(rail);}rail.replaceChildren();
   for(const link of links){
-    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.url,()=>go(link.url),'quick-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
-    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-tab',link.url);}};const b=button('',link.name,()=>go(link.url),'rail-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-tab',link.url);}};b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
+    if(link.home){const item=document.createElement('div');item.className='quick-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-background-tab',link.url);}};const b=button('',link.url,()=>go(link.url),'quick-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-background-tab',link.url);}};b.append(favicon('',link.url,link.name),text('span',link.name));item.append(b,button('×','Открепить с главной',()=>unpinLink(link,'home'),'unpin-link'));$('quick-links').append(item);}
+    if(link.sidebar){const item=document.createElement('div');item.className='rail-link';item.dataset.linkId=link.id;item.oncontextmenu=e=>linkMenu(e,link);item.onauxclick=e=>{if(e.button===1){e.preventDefault();command('open-background-tab',link.url);}};const b=button('',link.name,()=>go(link.url),'rail-open');b.onauxclick=e=>{if(e.button===1){e.preventDefault();e.stopPropagation();command('open-background-tab',link.url);}};b.append(favicon('',link.url,link.name));item.append(b,button('×','Открепить с боковой панели',()=>unpinLink(link,'sidebar'),'unpin-link'));rail.append(item);}
   }
   $('quick-links').append(button('＋','Добавить или изменить быстрые ссылки',()=>panel('links-panel'),'add-quick-link'));
   rail.hidden=!preferences.showSidebarLinks;

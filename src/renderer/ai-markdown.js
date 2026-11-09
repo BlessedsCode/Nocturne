@@ -2,7 +2,7 @@
 (() => {
  const node=(tag,text)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
  function webURL(value){try{const url=new URL(value);return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?url.href:'';}catch{return '';}}
- function link(label,url){const href=webURL(url);if(!href)return node('span',label);const a=node('a',label);a.href=href;a.title=href;a.rel='noopener noreferrer';a.onclick=event=>{event.preventDefault();window.browser.command('open-tab',href);};a.onauxclick=event=>{if(event.button===1){event.preventDefault();window.browser.command('open-tab',href);}};return a;}
+ function link(label,url){const href=webURL(url);if(!href)return node('span',label);const a=node('a',label);a.href=href;a.title=href;a.rel='noopener noreferrer';a.onclick=event=>{event.preventDefault();window.browser.command('open-tab',href);};a.onauxclick=event=>{if(event.button===1){event.preventDefault();window.browser.command('open-background-tab',href);}};return a;}
  function inline(parent,text,sources,depth=0,links=true){
   if(depth>8){parent.append(document.createTextNode(text));return;}
   let plain='';const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain='';}};

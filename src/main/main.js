@@ -142,13 +142,15 @@ function exitTabFullscreen(tab) {
   if (win && !win.isDestroyed() && win.isFullScreen()) win.setFullScreen(false);
 }
 function toggleTabMuted(id){const t=tabs.get(id);if(!t)return; t.muted=!t.muted;liveContents(t)?.setAudioMuted(t.muted);state();return {muted:t.muted};}
-function requestOverlay(visible){
+function requestOverlay(mode){
  if(!win||win.isDestroyed())return;
  const tab=current(),wc=liveContents(tab);
- if(overlay===visible&&visible)return;
- const moveFocus=visible&&wc?.isFocused();
- overlay=visible;
- win.webContents.send('overlay-background',{hasSite:!!(visible&&wc&&!tab.error&&!tab.security)});
+ if(overlay===mode&&mode)return;
+ const hasSite=!!(mode&&wc&&!tab.error&&!tab.security);
+ const docked=hasSite&&mode!==true;
+ const moveFocus=hasSite&&!docked&&wc.isFocused();
+ overlay=mode;
+ win.webContents.send('overlay-background',{hasSite,covered:hasSite&&!docked});
  layout();
  // The hidden child view must not retain keyboard input.
  if(moveFocus)win.webContents.focus();
@@ -261,17 +263,25 @@ function attachBrowserControls(wc,isShell=false){
 }
 function layout() {
   if (!win || win.isDestroyed()) return;
-  const [width,height] = win.getContentSize();
-  for (const t of tabs.values()) if(t.view) {
-    const contents=liveContents(t);if(!contents)continue;
-    const visible=t.id === active && !overlay && !profileIntroduction && !t.error && !t.security;
-    t.view.setVisible(visible);
-    // Native child-view visibility is not always reflected by document.hidden.
-    if(t.contentVisible!==visible){t.contentVisible=visible;contents.send('content-visibility',visible);}
-    if(t.id === active && t.htmlFullScreen){
-      t.view.setBounds({x:0,y:0,width,height});
-    }else{
-      t.view.setBounds({x:76,y:112,width:Math.max(1,width-88),height:Math.max(1,height-124)});
+  const [width,height]=win.getContentSize();
+  for(const tab of tabs.values()){
+    const contents=liveContents(tab);
+    if(!contents)continue;
+    const docked=typeof overlay==='string';
+    const visible=tab.id===active&&(!overlay||docked)&&!profileIntroduction&&!tab.error&&!tab.security;
+    if(visible){
+      // Keep these edges aligned with the two docked panels in the shell.
+      const left=docked&&overlay==='downloads-panel'?490:76;
+      const right=docked&&overlay==='ai-assistant'?436:12;
+      const bounds=tab.htmlFullScreen&&!docked?{x:0,y:0,width,height}:
+        {x:left,y:112,width:Math.max(1,width-left-right),height:Math.max(1,height-124)};
+      const previous=tab.view.getBounds();
+      if(Object.keys(bounds).some(key=>bounds[key]!==previous[key]))tab.view.setBounds(bounds);
+    }
+    if(tab.contentVisible!==visible){
+      tab.contentVisible=visible;
+      tab.view.setVisible(visible);
+      contents.send('content-visibility',visible);
     }
   }
 }
@@ -293,6 +303,8 @@ function attachTabWebContents(t, url, nativeOptions) {
       partition: 'persist:nocturne'
     }
   });
+  t.view.setVisible(false);
+  t.contentVisible=undefined;
   win.contentView.addChildView(t.view);
   const attachedView=t.view;
   const wc = t.view.webContents;
@@ -310,12 +322,16 @@ function attachTabWebContents(t, url, nativeOptions) {
   onContents('dom-ready',()=>wc.executeJavaScriptInIsolatedWorld(998,[{code:'('+watchEdits.toString()+')()'}]).catch(()=>{}));
   wc.setZoomFactor(profile.preferences.zoom / 100);
   let popupTimes = [];
-  wc.setWindowOpenHandler(({url, disposition}) => {
+  wc.setWindowOpenHandler(({url, disposition, referrer, postBody}) => {
     popupTimes = popupTimes.filter(time => Date.now() - time < 60000);
     const isUserClick = disposition === 'background-tab' || disposition === 'foreground-tab';
     const blank=url==='about:blank'||url==='';
     if((!/^https?:\/\//i.test(url)&&!blank)||tabs.size>=40||(!isUserClick&&popupTimes.length>=30)){
       security.record(url,'popup');return {action:'deny'};
+    }
+    if(disposition==='background-tab'&&!blank&&!postBody){
+      newTab(url,{background:true,referrer});
+      return {action:'deny'};
     }
     if(!isUserClick)popupTimes.push(Date.now());
     // Let Chromium create the real Window relationship. Manually loadURL'ing a
@@ -484,15 +500,22 @@ function wakeTab(t) {
   const wc = attachTabWebContents(t, t.url);
   const saved=t.savedNavigation,restoringURL=t.url;t.savedNavigation=null;
   if(saved)wc.navigationHistory.restore(saved).catch(()=>{if(!wc.isDestroyed()&&t.view?.webContents===wc&&t.restoring&&t.url===restoringURL&&!t.security){t.loading=false;t.restoring=false;t.error='Не удалось восстановить страницу. Обнови вкладку.';layout();state();}});
-  else wc.loadURL(t.url).catch(() => {});
+  else {
+    const referrer=t.referrer;
+    t.referrer=null;
+    wc.loadURL(t.url,referrer?{httpReferrer:referrer}:undefined).catch(()=>{});
+  }
   layout();
   state();
 }
 function newTab(url, options = {}) {
   closePageFind(false);
   if(tabs.size>=40)return {error:'Открыто слишком много вкладок. Закрой ненужные.'};
-  const previous=active;
-  const inBackground=options.background??!!(url&&profile?.preferences.backgroundTabs);
+  const inBackground=options.background??!!(active&&url&&profile?.preferences.backgroundTabs);
+  const deferred=!!url&&inBackground&&!options.nativeOptions;
+  if(deferred){
+    try{url=resolveAddress(url);}catch(error){return {error:error.message};}
+  }
   const t = {
     id:++nextId,
     title:'Новая вкладка',
@@ -511,15 +534,23 @@ function newTab(url, options = {}) {
     htmlFullScreen:false
   };
   if (!inBackground) exitTabFullscreen(current());
-  tabs.set(t.id,t); active=t.id;
+  tabs.set(t.id,t);
+  if(!inBackground)active=t.id;
   if(options.nativeOptions){
     t.url=url;t.title=/^https?:/.test(url)?new URL(url).hostname:'Окно сайта';t.loading=true;t.openerId=options.openerId;t.authPopup=!!options.authPopup;
     attachTabWebContents(t,url,options.nativeOptions);layout();state();
   }
-  else if(url&&options.lazy){t.url=url;t.title=options.metadata?.title||new URL(url).hostname;t.favicon=options.metadata?.favicon||'';t.neverDiscard=!!options.metadata?.neverDiscard;t.sleeping=true;layout();state();}
+  else if(deferred){
+    t.url=url;
+    t.title=options.metadata?.title||new URL(url).hostname;
+    t.favicon=options.metadata?.favicon||'';
+    t.neverDiscard=!!options.metadata?.neverDiscard;
+    t.referrer=options.referrer;
+    t.sleeping=true;
+    state();
+  }
   else if(url){navigate(url);t.neverDiscard=!!options.metadata?.neverDiscard;}
   else {layout();state();}
-  if(inBackground&&previous){active=previous;const p=tabs.get(previous);if(p)p.lastActiveAt=Date.now();layout();state();}
   if(!inBackground){focusActiveTab();if(!url)win.webContents.send('focus-address');}
   return {id:t.id};
 }
@@ -695,7 +726,7 @@ app.whenReady().then(async()=>{
     const restore=profile.preferences.restoreSession?profile.sessionState:{tabs:[],active:0};
     for(let i=0;i<restore.tabs.length;i++){
       const entry=restore.tabs[i];
-      newTab(entry.url,{background:i!==restore.active,lazy:profile.preferences.memorySaver&&i!==restore.active,metadata:entry});
+      newTab(entry.url,{background:i!==restore.active,metadata:entry});
     }
     openExternalIntents();
     if(!tabs.size)newTab();
@@ -892,7 +923,7 @@ app.whenReady().then(async()=>{
     if(action==='page-find')return performFind(value);
     if(action==='page-find-close'){closePageFind();return;}
     if(action==='navigate')return navigate(value);
-    if(action==='open-tab'&&typeof value==='string'&&/^https?:\/\//i.test(value))return newTab(value);
+    if(['open-tab','open-background-tab'].includes(action)&&typeof value==='string'&&/^https?:\/\//i.test(value))return newTab(value,{background:action==='open-background-tab'?true:undefined});
     if(action==='new')newTab();
     if(action==='tab-toggle-mute')return toggleTabMuted(value);
     if(action==='tab-context-menu'){
@@ -1014,7 +1045,7 @@ app.whenReady().then(async()=>{
     if(action==='back'&&wc?.navigationHistory.canGoBack())wc.navigationHistory.goBack();
     if(action==='forward'&&wc?.navigationHistory.canGoForward())wc.navigationHistory.goForward();
     if(action==='reload'&&current()?.url)navigate(current().url);
-    if(action==='overlay')return await requestOverlay(!!value);
+    if(action==='overlay')return requestOverlay(['downloads-panel','ai-assistant'].includes(value)?value:!!value);
     if(action==='minimize')win.minimize();
     if(action==='maximize')win.isMaximized()?win.unmaximize():win.maximize();
     if(action==='window-motion'){closeMotionEnabled=value===true;return;}
